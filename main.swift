@@ -18,10 +18,18 @@
 //   - Four solid panel themes (Midnight Teal, Graphite, Daylight,
 //     Amber Dusk) in a Theme submenu, persisted in UserDefaults
 //   - End-of-session chime
+//   - Settings window (v2.4) with four tabs — General, Appearance,
+//     Shortcuts, Advanced — in StayAwake's own layout: theme swatches
+//     with a live mini-timer preview, a recordable global hotkey
+//     (default ⌃⌥⌘S), a default duration, activate-at-launch,
+//     activate-on-left-click, pause-while-locked, and a dimmed menu
+//     bar icon while off. Every setting persists and ships with a
+//     sensible default pre-selected.
 //
 // Build with ./build.sh (swiftc, Xcode Command Line Tools). No dependencies.
 
 import Cocoa
+import Carbon
 import IOKit.pwr_mgt
 import ServiceManagement
 
@@ -46,6 +54,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var lowBatteryGuard = true {
         didSet { UserDefaults.standard.set(lowBatteryGuard, forKey: "lowBatteryGuard") }
+    }
+
+    // Settings-window settings (v2.4) — same persistence pattern. The
+    // defaults below are what a fresh install starts with, already
+    // selected; on an existing install the window simply reflects the
+    // values already stored, so nothing resets.
+    private var activateAtLaunch = false {
+        didSet { UserDefaults.standard.set(activateAtLaunch, forKey: "activateAtLaunch") }
+    }
+    private var activateOnLeftClick = false {
+        didSet { UserDefaults.standard.set(activateOnLeftClick, forKey: "activateOnLeftClick") }
+    }
+    private var showPanelOnStart = true {
+        didSet { UserDefaults.standard.set(showPanelOnStart, forKey: "showPanelOnStart") }
+    }
+    /// Default duration in minutes; 0 means indefinitely.
+    private var defaultMinutes = 0 {
+        didSet { UserDefaults.standard.set(defaultMinutes, forKey: "defaultMinutes") }
+    }
+    private var dimIconWhenOff = true {
+        didSet { UserDefaults.standard.set(dimIconWhenOff, forKey: "dimIconWhenOff") }
+    }
+    private var pauseOnLock = false {
+        didSet { UserDefaults.standard.set(pauseOnLock, forKey: "pauseOnLock") }
+    }
+    private var chimeOnEnd = true {
+        didSet { UserDefaults.standard.set(chimeOnEnd, forKey: "chimeOnEnd") }
+    }
+    /// Global hotkey: Carbon key code + Carbon modifier mask.
+    /// Default is ⌃⌥⌘S (key code 1, modifiers 4096+2048+256 = 6400).
+    /// A key code of -1 means no shortcut is set.
+    private var hotkeyKeyCode = 1 {
+        didSet { UserDefaults.standard.set(hotkeyKeyCode, forKey: "hotkeyKeyCode") }
+    }
+    private var hotkeyModifiers = 6400 {
+        didSet { UserDefaults.standard.set(hotkeyModifiers, forKey: "hotkeyModifiers") }
     }
 
     // MARK: Panel themes
@@ -112,6 +156,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var isActive: Bool { assertionID != 0 }
     var isIndefinite: Bool { isActive && deadline == nil }
+    /// A session exists (started, not yet deactivated) — unlike isActive
+    /// this stays true while paused for a locked screen, when the power
+    /// assertions are temporarily released.
+    var hasSession: Bool { startedAt != nil }
+
+    // MARK: Settings window / hotkey / lock-pause state
+    private var mainMenu: NSMenu?
+    private var pausedForLock = false
+    private var lockPausedAt: Date?
+    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyHandlerRef: EventHandlerRef?
+    private var settingsWindow: NSWindow?
+    private var genLaunchLoginBox: NSButton?
+    private var genActivateAtLaunchBox: NSButton?
+    private var genLeftClickBox: NSButton?
+    private var genShowPanelBox: NSButton?
+    private var advDurationPopup: NSPopUpButton?
+    private var advDisplaySleepBox: NSButton?
+    private var advPauseLockBox: NSButton?
+    private var advOffBatteryBox: NSButton?
+    private var advLowBatteryBox: NSButton?
+    private var advChimeBox: NSButton?
+    private var appDimIconBox: NSButton?
+    private var swatchButtons: [NSButton] = []
+    private var previewBG: NSView?
+    private var previewTitle: NSTextField?
+    private var previewTime: NSTextField?
+    private var previewStatus: NSTextField?
+    private var previewTrack: NSView?
+    private var previewFill: NSView?
+    private var previewPills: [(NSView, NSTextField)] = []
+    private var shortcutButton: NSButton?
+    private var recordingMonitor: Any?
+    private let durationChoices: [(String, Int)] = [
+        ("Indefinitely", 0), ("15 minutes", 15), ("30 minutes", 30),
+        ("1 hour", 60), ("2 hours", 120), ("4 hours", 240), ("8 hours", 480),
+    ]
 
     // MARK: Mini timer panel UI
     private var panel: NSPanel?
@@ -138,11 +219,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            themes.contains(where: { $0.name == savedTheme }) {
             themeName = savedTheme
         }
+        // v2.4 settings: plain bools default to false; the ones whose
+        // default is true (and the hotkey) only override when stored.
+        activateAtLaunch = defaults.bool(forKey: "activateAtLaunch")
+        activateOnLeftClick = defaults.bool(forKey: "activateOnLeftClick")
+        pauseOnLock = defaults.bool(forKey: "pauseOnLock")
+        defaultMinutes = defaults.integer(forKey: "defaultMinutes")
+        if defaults.object(forKey: "showPanelOnStart") != nil {
+            showPanelOnStart = defaults.bool(forKey: "showPanelOnStart")
+        }
+        if defaults.object(forKey: "dimIconWhenOff") != nil {
+            dimIconWhenOff = defaults.bool(forKey: "dimIconWhenOff")
+        }
+        if defaults.object(forKey: "chimeOnEnd") != nil {
+            chimeOnEnd = defaults.bool(forKey: "chimeOnEnd")
+        }
+        if defaults.object(forKey: "hotkeyKeyCode") != nil {
+            hotkeyKeyCode = defaults.integer(forKey: "hotkeyKeyCode")
+        }
+        if defaults.object(forKey: "hotkeyModifiers") != nil {
+            hotkeyModifiers = defaults.integer(forKey: "hotkeyModifiers")
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
+        // Clicks are handled manually so "Activate on left-click" can
+        // toggle instead of opening the menu (right-click always opens
+        // the menu; see statusItemClicked).
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         updateUI()
+        registerHotkey()
+        // Pause-while-locked observers.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(screenLocked),
+            name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(screenUnlocked),
+            name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.tick()
+        }
+        if activateAtLaunch {
+            activate(minutes: defaultMinutes)
         }
     }
 
@@ -194,6 +313,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Session control
     func activate(minutes: Int) {
         releaseAssertions()
+        pausedForLock = false
+        lockPausedAt = nil
         createAssertions()
         startedAt = Date()
         if minutes > 0 {
@@ -203,13 +324,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             totalSeconds = 0
             deadline = nil
         }
-        showPanel()
+        if showPanelOnStart { showPanel() }
         buildMenu()
         updateUI()
     }
 
     func deactivate(chime: Bool = false) {
         releaseAssertions()
+        pausedForLock = false
+        lockPausedAt = nil
         startedAt = nil
         deadline = nil
         totalSeconds = 0
@@ -217,6 +340,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if chime { NSSound(named: NSSound.Name("Glass"))?.play() }
         buildMenu()
         updateUI()
+    }
+
+    /// Toggle using the default duration — the hotkey and the
+    /// activate-on-left-click behaviour both go through here.
+    func toggleDefault() {
+        if hasSession { deactivate() } else { activate(minutes: defaultMinutes) }
     }
 
     @objc func add15() {
@@ -230,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard isActive else { return }
         tickCount += 1
         if let deadline, Date() >= deadline {
-            deactivate(chime: true)
+            deactivate(chime: chimeOnEnd)
             return
         }
         // Battery checks roughly every 10 seconds (20 ticks at 0.5s).
@@ -419,6 +548,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateUI() {
         guard let button = statusItem?.button else { return }
+        if pausedForLock && hasSession {
+            // Frozen display while the screen is locked: the countdown
+            // resumes from this exact point on unlock.
+            button.alphaValue = 1.0
+            button.image = menuBarImage(active: true)
+            button.imagePosition = .imageLeading
+            if let deadline {
+                let frozenAt = lockPausedAt ?? Date()
+                let left = Int(deadline.timeIntervalSince(frozenAt))
+                button.title = button.image == nil ? "☕ " + format(left) : format(left)
+                timeLabel?.stringValue = format(left)
+            } else {
+                button.title = button.image == nil ? "☕ ∞" : "∞"
+                let elapsed = startedAt.map { Int((lockPausedAt ?? Date()).timeIntervalSince($0)) } ?? 0
+                timeLabel?.stringValue = format(elapsed)
+            }
+            statusLabel?.stringValue = "Paused — screen is locked"
+            endLabel?.stringValue = "Resumes when you unlock"
+            button.toolTip = "StayAwake is paused (screen locked)"
+            return
+        }
         if !isActive {
             if let image = menuBarImage(active: false) {
                 button.image = image
@@ -427,9 +577,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = nil
                 button.title = "💤"
             }
+            button.alphaValue = dimIconWhenOff ? 0.45 : 1.0
             button.toolTip = "StayAwake is off"
             return
         }
+        button.alphaValue = 1.0
         button.image = menuBarImage(active: true)
         button.imagePosition = .imageLeading
         if let deadline {
@@ -462,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.3"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.4"
         let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
@@ -547,12 +699,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(login)
 
+        let settings = NSMenuItem(title: "Settings…",
+                                  action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit StayAwake", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
-        statusItem.menu = menu
+        // The menu is no longer attached to the status item full-time:
+        // statusItemClicked attaches it on demand so left-click can
+        // toggle instead when that setting is on.
+        mainMenu = menu
+        refreshSettingsControls()
     }
 
     @objc private func presetClicked(_ sender: NSMenuItem) {
@@ -617,6 +778,417 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
     }
     @objc private func quitClicked() { deactivate(); NSApp.terminate(nil) }
+
+    // MARK: Status item clicks
+    /// Left-click toggles (with the default duration) when "Activate on
+    /// left-click" is on; otherwise — and always on right-click or
+    /// Control-click — the menu opens.
+    @objc private func statusItemClicked() {
+        guard let event = NSApp.currentEvent else { return }
+        let wantsMenu = event.type == .rightMouseDown
+            || event.modifierFlags.contains(.control)
+            || !activateOnLeftClick
+        if wantsMenu {
+            statusItem.menu = mainMenu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
+        } else {
+            toggleDefault()
+        }
+    }
+
+    // MARK: Global hotkey (Carbon)
+    private func registerHotkey() {
+        unregisterHotkey()
+        guard hotkeyKeyCode >= 0 else { return }
+        if hotKeyHandlerRef == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                     eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
+                guard let userData else { return noErr }
+                Unmanaged<AppDelegate>.fromOpaque(userData)
+                    .takeUnretainedValue().hotkeyPressed()
+                return noErr
+            }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandlerRef)
+        }
+        var hotKeyID = EventHotKeyID()
+        hotKeyID.signature = 0x5341574B // 'SAWK'
+        hotKeyID.id = 1
+        RegisterEventHotKey(UInt32(hotkeyKeyCode), UInt32(hotkeyModifiers), hotKeyID,
+                            GetApplicationEventTarget(), 0, &hotKeyRef)
+    }
+
+    private func unregisterHotkey() {
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
+    }
+
+    func hotkeyPressed() { toggleDefault() }
+
+    private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> Int {
+        var m = 0
+        if flags.contains(.control) { m |= 4096 } // controlKey
+        if flags.contains(.option) { m |= 2048 }  // optionKey
+        if flags.contains(.shift) { m |= 512 }    // shiftKey
+        if flags.contains(.command) { m |= 256 }  // cmdKey
+        return m
+    }
+
+    private let keyNames: [Int: String] = [
+        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+        8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
+        16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4", 22: "6",
+        23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0",
+        30: "]", 31: "O", 32: "U", 33: "[", 34: "I", 35: "P", 36: "↩",
+        37: "L", 38: "J", 39: "'", 40: "K", 41: ";", 42: "\\", 43: ",",
+        44: "/", 45: "N", 46: "M", 47: ".", 49: "Space", 50: "`",
+        51: "⌫", 53: "Esc",
+    ]
+
+    private func shortcutDisplayString() -> String? {
+        guard hotkeyKeyCode >= 0 else { return nil }
+        var s = ""
+        if hotkeyModifiers & 4096 != 0 { s += "⌃" }
+        if hotkeyModifiers & 2048 != 0 { s += "⌥" }
+        if hotkeyModifiers & 512 != 0 { s += "⇧" }
+        if hotkeyModifiers & 256 != 0 { s += "⌘" }
+        s += keyNames[hotkeyKeyCode] ?? "Key \(hotkeyKeyCode)"
+        return s
+    }
+
+    // MARK: Pause while screen is locked
+    @objc private func screenLocked() {
+        guard pauseOnLock, hasSession, !pausedForLock else { return }
+        pausedForLock = true
+        lockPausedAt = Date()
+        releaseAssertions()
+        updateUI()
+    }
+
+    @objc private func screenUnlocked() {
+        guard pausedForLock else { return }
+        pausedForLock = false
+        let lockedFor = lockPausedAt.map { Date().timeIntervalSince($0) } ?? 0
+        lockPausedAt = nil
+        if hasSession {
+            // Freeze-frame the session across the locked interval.
+            if let d = deadline { deadline = d.addingTimeInterval(lockedFor) }
+            if let s = startedAt { startedAt = s.addingTimeInterval(lockedFor) }
+            createAssertions()
+        }
+        updateUI()
+    }
+
+    // MARK: Settings window
+    @objc private func showSettings() {
+        makeSettingsWindowIfNeeded()
+        refreshSettingsControls()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.center()
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func makeSettingsWindowIfNeeded() {
+        guard settingsWindow == nil else { return }
+
+        func checkbox(_ title: String, _ y: CGFloat, _ action: Selector) -> NSButton {
+            let b = NSButton(checkboxWithTitle: title, target: self, action: action)
+            b.frame = NSRect(x: 24, y: y, width: 410, height: 20)
+            return b
+        }
+        func caption(_ text: String, _ y: CGFloat, _ height: CGFloat = 16) -> NSTextField {
+            let f = NSTextField(wrappingLabelWithString: text)
+            f.frame = NSRect(x: 24, y: y, width: 404, height: height)
+            f.font = .systemFont(ofSize: 11)
+            f.textColor = .secondaryLabelColor
+            return f
+        }
+        func tab(_ label: String, _ symbol: String, _ view: NSView) -> NSTabViewItem {
+            let item = NSTabViewItem(identifier: label)
+            item.label = label
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            view.frame = NSRect(x: 0, y: 0, width: 452, height: 300)
+            view.autoresizingMask = [.width, .height]
+            item.view = view
+            return item
+        }
+
+        // — General —
+        let general = NSView()
+        genLaunchLoginBox = checkbox("Launch at login", 232, #selector(toggleLaunchAtLogin))
+        genActivateAtLaunchBox = checkbox("Activate at launch", 202, #selector(genActivateAtLaunchToggled(_:)))
+        genLeftClickBox = checkbox("Activate on left-click", 172, #selector(genLeftClickToggled(_:)))
+        genShowPanelBox = checkbox("Show the mini timer when a session starts", 112, #selector(genShowPanelToggled(_:)))
+        general.addSubview(genLaunchLoginBox!)
+        general.addSubview(genActivateAtLaunchBox!)
+        general.addSubview(genLeftClickBox!)
+        general.addSubview(caption("With left-click activation on, a right-click (or Control-click) opens the menu instead.", 142, 26))
+        general.addSubview(genShowPanelBox!)
+
+        // — Appearance —
+        let appearance = NSView()
+        let themeLabel = NSTextField(labelWithString: "Mini timer theme:")
+        themeLabel.frame = NSRect(x: 24, y: 248, width: 300, height: 18)
+        themeLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        appearance.addSubview(themeLabel)
+        swatchButtons = []
+        for (i, theme) in themes.enumerated() {
+            let b = NSButton(title: theme.name, target: self, action: #selector(swatchClicked(_:)))
+            b.frame = NSRect(x: 24 + CGFloat(i) * 106, y: 210, width: 100, height: 34)
+            b.setButtonType(.pushOnPushOff)
+            b.bezelStyle = .rounded
+            b.bezelColor = theme.background
+            b.attributedTitle = NSAttributedString(
+                string: theme.name,
+                attributes: [.foregroundColor: theme.primaryText,
+                             .font: NSFont.systemFont(ofSize: 12)])
+            b.tag = i
+            swatchButtons.append(b)
+            appearance.addSubview(b)
+        }
+        let bg = NSView(frame: NSRect(x: 66, y: 52, width: 320, height: 140))
+        bg.wantsLayer = true
+        bg.layer?.cornerRadius = 12
+        bg.layer?.masksToBounds = true
+        let pTitle = NSTextField(labelWithString: "☕ StayAwake")
+        pTitle.frame = NSRect(x: 16, y: 112, width: 220, height: 18)
+        pTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        bg.addSubview(pTitle)
+        let pTime = NSTextField(labelWithString: "24:59")
+        pTime.frame = NSRect(x: 16, y: 76, width: 220, height: 32)
+        pTime.font = .monospacedDigitSystemFont(ofSize: 24, weight: .bold)
+        bg.addSubview(pTime)
+        let pStatus = NSTextField(labelWithString: "ON — holding screen awake")
+        pStatus.frame = NSRect(x: 16, y: 60, width: 280, height: 14)
+        pStatus.font = .systemFont(ofSize: 11)
+        bg.addSubview(pStatus)
+        let pTrack = NSView(frame: NSRect(x: 16, y: 42, width: 288, height: 8))
+        pTrack.wantsLayer = true
+        pTrack.layer?.cornerRadius = 4
+        let pFill = NSView(frame: NSRect(x: 0, y: 0, width: 170, height: 8))
+        pFill.wantsLayer = true
+        pFill.layer?.cornerRadius = 4
+        pTrack.addSubview(pFill)
+        bg.addSubview(pTrack)
+        var pills: [(NSView, NSTextField)] = []
+        for (title, x, w) in [("Hide", 16.0, 64.0), ("+15 min", 196.0, 64.0), ("Stop", 268.0, 56.0)] {
+            let pill = NSView(frame: NSRect(x: x, y: 10, width: w, height: 22))
+            pill.wantsLayer = true
+            pill.layer?.cornerRadius = 6
+            let lab = NSTextField(labelWithString: title)
+            lab.frame = NSRect(x: 0, y: 3, width: w, height: 16)
+            lab.alignment = .center
+            lab.font = .systemFont(ofSize: 11)
+            pill.addSubview(lab)
+            bg.addSubview(pill)
+            pills.append((pill, lab))
+        }
+        appearance.addSubview(bg)
+        previewBG = bg
+        previewTitle = pTitle
+        previewTime = pTime
+        previewStatus = pStatus
+        previewTrack = pTrack
+        previewFill = pFill
+        previewPills = pills
+        appDimIconBox = checkbox("Dim the menu bar icon while StayAwake is off", 14, #selector(appDimIconToggled(_:)))
+        appearance.addSubview(appDimIconBox!)
+
+        // — Shortcuts —
+        let shortcuts = NSView()
+        let scLabel = NSTextField(labelWithString: "Activate/deactivate StayAwake:")
+        scLabel.frame = NSRect(x: 24, y: 232, width: 300, height: 18)
+        shortcuts.addSubview(scLabel)
+        let rec = NSButton(title: "Record Shortcut", target: self, action: #selector(recordShortcutClicked))
+        rec.frame = NSRect(x: 24, y: 192, width: 200, height: 30)
+        rec.bezelStyle = .rounded
+        shortcuts.addSubview(rec)
+        shortcutButton = rec
+        let clear = NSButton(title: "Clear", target: self, action: #selector(clearShortcutClicked))
+        clear.frame = NSRect(x: 232, y: 192, width: 70, height: 30)
+        clear.bezelStyle = .rounded
+        shortcuts.addSubview(clear)
+        shortcuts.addSubview(caption("Recommended: ⌃⌥⌘S — already set as the default.", 158))
+        shortcuts.addSubview(caption("StayAwake also answers to URLs, so Apple Shortcuts, scripts, Raycast, and Alfred can drive it: stayawake://activate?minutes=30, stayawake://deactivate, stayawake://toggle.", 96, 44))
+
+        // — Advanced —
+        let advanced = NSView()
+        let durLabel = NSTextField(labelWithString: "Default duration:")
+        durLabel.frame = NSRect(x: 24, y: 234, width: 130, height: 18)
+        advanced.addSubview(durLabel)
+        let popup = NSPopUpButton(frame: NSRect(x: 150, y: 230, width: 190, height: 26), pullsDown: false)
+        for (title, _) in durationChoices { popup.addItem(withTitle: title) }
+        popup.target = self
+        popup.action = #selector(durationPopupChanged)
+        advanced.addSubview(popup)
+        advDurationPopup = popup
+        advDisplaySleepBox = checkbox("Allow display to sleep while awake", 190, #selector(advDisplaySleepToggled(_:)))
+        advPauseLockBox = checkbox("Pause while the screen is locked", 160, #selector(advPauseLockToggled(_:)))
+        advOffBatteryBox = checkbox("Deactivate when switching to battery", 130, #selector(advOffBatteryToggled(_:)))
+        advLowBatteryBox = checkbox("Stop at 20% battery", 100, #selector(advLowBatteryToggled(_:)))
+        advChimeBox = checkbox("Play a sound when a session ends", 70, #selector(advChimeToggled(_:)))
+        advanced.addSubview(advDisplaySleepBox!)
+        advanced.addSubview(advPauseLockBox!)
+        advanced.addSubview(advOffBatteryBox!)
+        advanced.addSubview(advLowBatteryBox!)
+        advanced.addSubview(advChimeBox!)
+        advanced.addSubview(caption("The default duration is what the hotkey, left-click activation, and Activate at launch use.", 30, 26))
+
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
+                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "StayAwake Settings"
+        w.isReleasedWhenClosed = false
+        let tabView = NSTabView(frame: NSRect(x: 0, y: 0, width: 480, height: 360))
+        tabView.autoresizingMask = [.width, .height]
+        tabView.addTabViewItem(tab("General", "gearshape", general))
+        tabView.addTabViewItem(tab("Appearance", "paintpalette", appearance))
+        tabView.addTabViewItem(tab("Shortcuts", "command", shortcuts))
+        tabView.addTabViewItem(tab("Advanced", "slider.horizontal.3", advanced))
+        w.contentView = tabView
+        settingsWindow = w
+    }
+
+    private func stylePreview() {
+        let theme = currentTheme
+        previewBG?.layer?.backgroundColor = theme.background.cgColor
+        previewTitle?.textColor = theme.primaryText
+        previewTime?.textColor = theme.primaryText
+        previewStatus?.textColor = theme.secondaryText
+        previewTrack?.layer?.backgroundColor = theme.track.cgColor
+        previewFill?.layer?.backgroundColor = theme.accent.cgColor
+        for (pill, lab) in previewPills {
+            pill.layer?.backgroundColor = theme.buttonBackground.cgColor
+            lab.textColor = theme.buttonText
+        }
+    }
+
+    /// Sync every control in the settings window with the live values.
+    /// Called when the window opens and after any change (menu toggles
+    /// included, via buildMenu), so the two never disagree.
+    private func refreshSettingsControls() {
+        guard settingsWindow != nil else { return }
+        if #available(macOS 13.0, *) {
+            genLaunchLoginBox?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            genLaunchLoginBox?.isEnabled = true
+        } else {
+            genLaunchLoginBox?.isEnabled = false
+        }
+        genActivateAtLaunchBox?.state = activateAtLaunch ? .on : .off
+        genLeftClickBox?.state = activateOnLeftClick ? .on : .off
+        genShowPanelBox?.state = showPanelOnStart ? .on : .off
+        if let popup = advDurationPopup {
+            let idx = durationChoices.firstIndex(where: { $0.1 == defaultMinutes }) ?? 0
+            popup.selectItem(at: idx)
+        }
+        advDisplaySleepBox?.state = allowDisplaySleep ? .on : .off
+        advPauseLockBox?.state = pauseOnLock ? .on : .off
+        advOffBatteryBox?.state = offOnBattery ? .on : .off
+        advLowBatteryBox?.state = lowBatteryGuard ? .on : .off
+        advChimeBox?.state = chimeOnEnd ? .on : .off
+        appDimIconBox?.state = dimIconWhenOff ? .on : .off
+        for (i, b) in swatchButtons.enumerated() {
+            b.state = themes[i].name == themeName ? .on : .off
+        }
+        stylePreview()
+        if recordingMonitor == nil { refreshShortcutButtonTitle() }
+    }
+
+    private func refreshShortcutButtonTitle() {
+        shortcutButton?.title = shortcutDisplayString() ?? "Record Shortcut"
+    }
+
+    // MARK: Settings control handlers
+    @objc private func genActivateAtLaunchToggled(_ sender: NSButton) {
+        activateAtLaunch = sender.state == .on
+    }
+    @objc private func genLeftClickToggled(_ sender: NSButton) {
+        activateOnLeftClick = sender.state == .on
+    }
+    @objc private func genShowPanelToggled(_ sender: NSButton) {
+        showPanelOnStart = sender.state == .on
+    }
+    @objc private func appDimIconToggled(_ sender: NSButton) {
+        dimIconWhenOff = sender.state == .on
+        updateUI()
+    }
+    @objc private func advDisplaySleepToggled(_ sender: NSButton) {
+        allowDisplaySleep = sender.state == .on
+        if isActive {
+            releaseAssertions()
+            createAssertions()
+        }
+        buildMenu()
+    }
+    @objc private func advPauseLockToggled(_ sender: NSButton) {
+        pauseOnLock = sender.state == .on
+    }
+    @objc private func advOffBatteryToggled(_ sender: NSButton) {
+        offOnBattery = sender.state == .on
+        buildMenu()
+    }
+    @objc private func advLowBatteryToggled(_ sender: NSButton) {
+        lowBatteryGuard = sender.state == .on
+        buildMenu()
+    }
+    @objc private func advChimeToggled(_ sender: NSButton) {
+        chimeOnEnd = sender.state == .on
+    }
+    @objc private func durationPopupChanged() {
+        guard let popup = advDurationPopup else { return }
+        let idx = popup.indexOfSelectedItem
+        if durationChoices.indices.contains(idx) {
+            defaultMinutes = durationChoices[idx].1
+        }
+    }
+    @objc private func swatchClicked(_ sender: NSButton) {
+        guard themes.indices.contains(sender.tag) else { return }
+        themeName = themes[sender.tag].name
+        applyTheme()
+        refreshSettingsControls()
+        buildMenu()
+    }
+
+    // MARK: Shortcut recording
+    @objc private func recordShortcutClicked() {
+        if recordingMonitor != nil {
+            stopRecording()
+            refreshShortcutButtonTitle()
+            return
+        }
+        shortcutButton?.title = "Type shortcut… (Esc to cancel)"
+        recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if event.keyCode == 53 { // Esc cancels
+                self.stopRecording()
+                self.refreshShortcutButtonTitle()
+                return nil
+            }
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if flags.isEmpty { return nil } // a modifier is required; keep listening
+            self.hotkeyKeyCode = Int(event.keyCode)
+            self.hotkeyModifiers = Self.carbonModifiers(from: flags)
+            self.registerHotkey()
+            self.stopRecording()
+            self.refreshShortcutButtonTitle()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let monitor = recordingMonitor {
+            NSEvent.removeMonitor(monitor)
+            recordingMonitor = nil
+        }
+    }
+
+    @objc private func clearShortcutClicked() {
+        stopRecording()
+        hotkeyKeyCode = -1
+        registerHotkey()
+        refreshShortcutButtonTitle()
+    }
 }
 
 let delegate = AppDelegate()

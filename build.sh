@@ -14,7 +14,7 @@ APP="StayAwake.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -framework Cocoa -framework IOKit -framework ServiceManagement \
+swiftc -O -framework Cocoa -framework Carbon -framework IOKit -framework ServiceManagement \
   -o "$APP/Contents/MacOS/StayAwake" main.swift
 
 # App icon (coffee cup / moon / star on teal) — built from AppIcon-1024.png.
@@ -30,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>StayAwake</string>
   <key>CFBundleDisplayName</key><string>StayAwake</string>
   <key>CFBundleIdentifier</key><string>io.starterdev.stayawake</string>
-  <key>CFBundleVersion</key><string>2.3.0</string>
-  <key>CFBundleShortVersionString</key><string>2.3</string>
+  <key>CFBundleVersion</key><string>2.4.0</string>
+  <key>CFBundleShortVersionString</key><string>2.4</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>StayAwake</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

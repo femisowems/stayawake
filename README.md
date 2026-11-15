@@ -61,6 +61,16 @@ tracking, and nothing sent anywhere**.
   launches. Themes are solid colour sets, so the countdown stays
   readable against any desktop — the old translucent HUD could wash its
   white text out to near-invisible on light backgrounds.
+- **A Settings window of its own** — **Settings…** (⌘,) opens a
+  four-tab window: *General* (launch at login, activate at launch,
+  activate on left-click, mini timer on start), *Appearance* (the four
+  themes as swatches with a **live preview** of the mini timer, plus a
+  dimmed menu bar icon while off), *Shortcuts* (a recordable global
+  hotkey, ⌃⌥⌘S by default), and *Advanced* (default duration, display
+  sleep, pause while the screen is locked, battery options, end-of-
+  session sound). Every setting ships with a sensible default already
+  selected and persists between launches; on an existing install the
+  window simply shows your current values.
 - **Private by design** — no data collected, no settings synced, no
   network calls. The app has nothing to phone home with.
 
@@ -157,6 +167,7 @@ Click the menu bar icon to open the menu:
 | **Deactivate when switching to battery** | Toggle: end the session when unplugged (default off). |
 | **Theme →** | Pick the mini timer's colour theme: Midnight Teal, Graphite, Daylight, or Amber Dusk. |
 | **Launch at login** | Toggle automatic start at login (macOS 13+). The menu also shows the current version at the top. |
+| **Settings…** (⌘,) | Open the Settings window: General, Appearance (theme swatches with a live mini-timer preview), Shortcuts (recordable global hotkey, ⌃⌥⌘S by default), and Advanced (default duration, pause while locked, battery options, end-of-session sound). |
 | **Quit StayAwake** | Quit the app (also ends any session). |
 
 While a session runs, the menu bar shows ☕ plus the time remaining, and
