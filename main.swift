@@ -15,6 +15,8 @@
 //     scripts, Raycast, Alfred…)
 //   - Launch at login toggle (SMAppService, macOS 13+; older systems use
 //     System Settings → Login Items) and a version line in the menu
+//   - Four solid panel themes (Midnight Teal, Graphite, Daylight,
+//     Amber Dusk) in a Theme submenu, persisted in UserDefaults
 //   - End-of-session chime
 //
 // Build with ./build.sh (swiftc, Xcode Command Line Tools). No dependencies.
@@ -46,15 +48,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { UserDefaults.standard.set(lowBatteryGuard, forKey: "lowBatteryGuard") }
     }
 
+    // MARK: Panel themes
+    // The mini timer used to be a translucent HUD with white text, which
+    // washed out to near-invisible in light surroundings. Themes are now
+    // solid, explicit colour sets — readable in any environment — and the
+    // chosen one persists like the other settings.
+    private struct PanelTheme {
+        let name: String
+        let background: NSColor
+        let primaryText: NSColor
+        let secondaryText: NSColor
+        let accent: NSColor
+        let track: NSColor
+        let buttonBackground: NSColor
+        let buttonText: NSColor
+    }
+
+    private static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: r, green: g, blue: b, alpha: a)
+    }
+
+    private let themes: [PanelTheme] = [
+        PanelTheme(name: "Midnight Teal",           // default — matches the app icon
+                   background: rgb(0.05, 0.20, 0.20),
+                   primaryText: .white,
+                   secondaryText: rgb(1, 1, 1, 0.65),
+                   accent: rgb(0.96, 0.65, 0.14),   // amber
+                   track: rgb(1, 1, 1, 0.18),
+                   buttonBackground: rgb(1, 1, 1, 0.14),
+                   buttonText: .white),
+        PanelTheme(name: "Graphite",
+                   background: rgb(0.11, 0.11, 0.12),
+                   primaryText: .white,
+                   secondaryText: rgb(1, 1, 1, 0.60),
+                   accent: rgb(0.37, 0.36, 0.90),   // indigo
+                   track: rgb(1, 1, 1, 0.16),
+                   buttonBackground: rgb(1, 1, 1, 0.12),
+                   buttonText: .white),
+        PanelTheme(name: "Daylight",
+                   background: rgb(0.98, 0.97, 0.94),
+                   primaryText: rgb(0.10, 0.10, 0.10),
+                   secondaryText: rgb(0, 0, 0, 0.55),
+                   accent: rgb(0.05, 0.45, 0.44),   // teal
+                   track: rgb(0, 0, 0, 0.10),
+                   buttonBackground: rgb(0, 0, 0, 0.07),
+                   buttonText: rgb(0.10, 0.10, 0.10)),
+        PanelTheme(name: "Amber Dusk",
+                   background: rgb(0.17, 0.10, 0.03),
+                   primaryText: rgb(1.0, 0.96, 0.91),
+                   secondaryText: rgb(1, 0.96, 0.91, 0.60),
+                   accent: rgb(1.0, 0.70, 0.25),    // warm amber
+                   track: rgb(1, 1, 1, 0.15),
+                   buttonBackground: rgb(1, 1, 1, 0.10),
+                   buttonText: rgb(1.0, 0.96, 0.91)),
+    ]
+
+    private var themeName = "Midnight Teal" {
+        didSet { UserDefaults.standard.set(themeName, forKey: "panelTheme") }
+    }
+    private var currentTheme: PanelTheme {
+        themes.first(where: { $0.name == themeName }) ?? themes[0]
+    }
+
     var isActive: Bool { assertionID != 0 }
     var isIndefinite: Bool { isActive && deadline == nil }
 
     // MARK: Mini timer panel UI
     private var panel: NSPanel?
+    private var panelView: NSView?
+    private var titleLabel: NSTextField?
     private var timeLabel: NSTextField?
     private var statusLabel: NSTextField?
     private var endLabel: NSTextField?
-    private var progressBar: NSProgressIndicator?
+    private var progressTrack: NSView?
+    private var progressFill: NSView?
+    private var panelButtons: [NSButton] = []
 
     // MARK: Lifecycle
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,6 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         offOnBattery = defaults.bool(forKey: "offOnBattery")
         if defaults.object(forKey: "lowBatteryGuard") != nil {
             lowBatteryGuard = defaults.bool(forKey: "lowBatteryGuard")
+        }
+        if let savedTheme = defaults.string(forKey: "panelTheme"),
+           themes.contains(where: { $0.name == savedTheme }) {
+            themeName = savedTheme
         }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
@@ -216,14 +288,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.isOpaque = false
         p.hasShadow = true
 
-        let effect = NSVisualEffectView(frame: rect)
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
+        // Solid themed surface (replaces the old translucent HUD view,
+        // whose white text washed out against light backgrounds).
+        let effect = NSView(frame: rect)
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 14
         effect.layer?.masksToBounds = true
         p.contentView = effect
+        panelView = effect
 
         func label(_ frame: NSRect, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSTextField {
             let field = NSTextField(frame: frame)
@@ -239,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let title = label(NSRect(x: 16, y: 156, width: 220, height: 20),
                           size: 13, weight: .semibold, color: .white)
         title.stringValue = "☕ StayAwake"
+        titleLabel = title
 
         let time = label(NSRect(x: 16, y: 108, width: 288, height: 42),
                          size: 30, weight: .bold, color: .white)
@@ -251,24 +324,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         endLabel = label(NSRect(x: 16, y: 48, width: 288, height: 16),
                          size: 12, weight: .regular, color: NSColor(white: 1, alpha: 0.65))
 
-        let bar = NSProgressIndicator(frame: NSRect(x: 16, y: 70, width: 288, height: 10))
-        bar.style = .bar
-        bar.minValue = 0
-        bar.maxValue = 100
-        bar.isIndeterminate = false
-        effect.addSubview(bar)
-        progressBar = bar
+        // Custom progress bar (track + fill) so the theme controls its
+        // colours exactly — NSProgressIndicator can't be tinted reliably.
+        let track = NSView(frame: NSRect(x: 16, y: 70, width: 288, height: 10))
+        track.wantsLayer = true
+        track.layer?.cornerRadius = 5
+        let fill = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: 10))
+        fill.wantsLayer = true
+        fill.layer?.cornerRadius = 5
+        track.addSubview(fill)
+        effect.addSubview(track)
+        progressTrack = track
+        progressFill = fill
 
         func button(_ title: String, x: CGFloat, action: Selector) -> NSButton {
             let b = NSButton(title: title, target: self, action: action)
             b.frame = NSRect(x: x, y: 12, width: 64, height: 26)
             b.bezelStyle = .rounded
+            b.isBordered = true
             effect.addSubview(b)
+            panelButtons.append(b)
             return b
         }
         _ = button("Hide", x: 16, action: #selector(hidePanel))
         _ = button("+15 min", x: 168, action: #selector(add15Clicked))
         _ = button("Stop", x: 240, action: #selector(stopClicked))
+        applyTheme()
 
         // Default spot: top-right of the main screen, below the menu bar.
         if let screen = NSScreen.main {
@@ -276,6 +357,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             p.setFrameOrigin(NSPoint(x: visible.maxX - 336, y: visible.maxY - 204))
         }
         panel = p
+    }
+
+    /// Repaint the whole panel from the current theme.
+    private func applyTheme() {
+        let theme = currentTheme
+        panelView?.layer?.backgroundColor = theme.background.cgColor
+        titleLabel?.textColor = theme.primaryText
+        timeLabel?.textColor = theme.primaryText
+        statusLabel?.textColor = theme.secondaryText
+        endLabel?.textColor = theme.secondaryText
+        progressTrack?.layer?.backgroundColor = theme.track.cgColor
+        progressFill?.layer?.backgroundColor = theme.accent.cgColor
+        for button in panelButtons {
+            button.bezelColor = theme.buttonBackground
+            button.contentTintColor = theme.buttonText
+        }
+    }
+
+    private func setProgress(_ fraction: Double) {
+        guard let fill = progressFill, let track = progressTrack else { return }
+        let clamped = min(1, max(0, fraction))
+        fill.frame = NSRect(x: 0, y: 0, width: track.frame.width * CGFloat(clamped), height: 10)
     }
 
     private func showPanel() {
@@ -330,7 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             endLabel?.stringValue = "Ends " + formatter.string(from: deadline)
             if totalSeconds > 0 {
                 let elapsed = totalSeconds - left
-                progressBar?.doubleValue = Double(elapsed) / Double(totalSeconds) * 100
+                setProgress(Double(elapsed) / Double(totalSeconds))
             }
         } else {
             button.title = button.image == nil ? "☕ ∞" : "∞"
@@ -338,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             timeLabel?.stringValue = format(elapsed)
             statusLabel?.stringValue = "ON — runs until you stop it"
             endLabel?.stringValue = "No end time"
-            progressBar?.doubleValue = 100
+            setProgress(1)
         }
         button.toolTip = "StayAwake is on"
     }
@@ -350,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.2"
         let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
@@ -409,6 +512,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guardItem.state = lowBatteryGuard ? .on : .off
         menu.addItem(guardItem)
 
+        let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu()
+        for theme in themes {
+            let item = NSMenuItem(title: theme.name, action: #selector(themeClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = theme.name
+            item.state = theme.name == themeName ? .on : .off
+            themeMenu.addItem(item)
+        }
+        themeItem.submenu = themeMenu
+        menu.addItem(themeItem)
+
         menu.addItem(.separator())
 
         let login = NSMenuItem(title: "Launch at login",
@@ -466,6 +581,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleOffOnBattery() { offOnBattery.toggle(); buildMenu() }
     @objc private func toggleLowBatteryGuard() { lowBatteryGuard.toggle(); buildMenu() }
+
+    @objc private func themeClicked(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              themes.contains(where: { $0.name == name }) else { return }
+        themeName = name
+        applyTheme()
+        buildMenu()
+    }
 
     @objc private func toggleLaunchAtLogin() {
         if #available(macOS 13.0, *) {

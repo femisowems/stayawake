@@ -55,6 +55,12 @@ tracking, and nothing sent anywhere**.
   already in your menu bar when you log in. Every push to this repo is
   also compiled by GitHub Actions on a macOS runner, with the built app
   attached to the run as a downloadable artifact.
+- **Four panel themes** — the mini timer comes in *Midnight Teal*
+  (default, matches the icon), *Graphite*, *Daylight*, and *Amber Dusk*,
+  switchable from the menu's **Theme** submenu and remembered between
+  launches. Themes are solid colour sets, so the countdown stays
+  readable against any desktop — the old translucent HUD could wash its
+  white text out to near-invisible on light backgrounds.
 - **Private by design** — no data collected, no settings synced, no
   network calls. The app has nothing to phone home with.
 
@@ -149,6 +155,7 @@ Click the menu bar icon to open the menu:
 | **Allow display to sleep while awake** | Toggle: system stays awake, screen may sleep. |
 | **Stop on low battery (≤20%)** | Toggle: auto-stop at 20% battery while unplugged (default on). |
 | **Deactivate when switching to battery** | Toggle: end the session when unplugged (default off). |
+| **Theme →** | Pick the mini timer's colour theme: Midnight Teal, Graphite, Daylight, or Amber Dusk. |
 | **Launch at login** | Toggle automatic start at login (macOS 13+). The menu also shows the current version at the top. |
 | **Quit StayAwake** | Quit the app (also ends any session). |
 
