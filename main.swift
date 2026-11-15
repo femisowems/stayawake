@@ -9,6 +9,10 @@
 //     progress bar, end time, +15 min and Stop
 //   - Low-battery guard: auto-stop at <= 20% while discharging (on by default)
 //   - Optional: deactivate when switching to battery; allow display to sleep
+//   - The three toggles persist in UserDefaults across relaunches
+//   - URL scheme for automation: stayawake://activate?minutes=30,
+//     stayawake://deactivate, stayawake://toggle (works from Shortcuts,
+//     scripts, Raycast, Alfred…)
 //   - End-of-session chime
 //
 // Build with ./build.sh (swiftc, Xcode Command Line Tools). No dependencies.
@@ -27,9 +31,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var tickCount: Int = 0
 
-    private var allowDisplaySleep = false
-    private var offOnBattery = false
-    private var lowBatteryGuard = true
+    // Settings — persisted to UserDefaults whenever they change, and
+    // reloaded at launch, so the toggles survive quitting the app.
+    private var allowDisplaySleep = false {
+        didSet { UserDefaults.standard.set(allowDisplaySleep, forKey: "allowDisplaySleep") }
+    }
+    private var offOnBattery = false {
+        didSet { UserDefaults.standard.set(offOnBattery, forKey: "offOnBattery") }
+    }
+    private var lowBatteryGuard = true {
+        didSet { UserDefaults.standard.set(lowBatteryGuard, forKey: "lowBatteryGuard") }
+    }
 
     var isActive: Bool { assertionID != 0 }
     var isIndefinite: Bool { isActive && deadline == nil }
@@ -43,11 +55,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Lifecycle
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Restore the saved toggles (lowBatteryGuard defaults to on, so
+        // only override it when a value was actually stored).
+        let defaults = UserDefaults.standard
+        allowDisplaySleep = defaults.bool(forKey: "allowDisplaySleep")
+        offOnBattery = defaults.bool(forKey: "offOnBattery")
+        if defaults.object(forKey: "lowBatteryGuard") != nil {
+            lowBatteryGuard = defaults.bool(forKey: "lowBatteryGuard")
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
         updateUI()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.tick()
+        }
+    }
+
+    // MARK: URL scheme — stayawake://activate?minutes=30 / deactivate / toggle
+    // Registered in Info.plist by build.sh. Lets Shortcuts (via "Open
+    // URLs"), shell scripts, Raycast, Alfred etc. drive the app.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { handleURL(url) }
+    }
+
+    private func handleURL(_ url: URL) {
+        guard url.scheme == "stayawake" else { return }
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let minutes = components?.queryItems?
+            .first(where: { $0.name == "minutes" })?.value.flatMap { Int($0) }
+        switch url.host {
+        case "activate":
+            activate(minutes: minutes ?? 0) // no minutes = indefinite
+        case "deactivate", "stop":
+            deactivate()
+        case "toggle":
+            if isActive { deactivate() } else { activate(minutes: minutes ?? 0) }
+        default:
+            break // stayawake:// on its own just launches the app
         }
     }
 
@@ -247,16 +291,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 
+    /// Native menu bar glyph (SF Symbol, template-rendered so it adapts
+    /// to light/dark menu bars) instead of an emoji. Falls back to the
+    /// emoji title if the symbol is unavailable.
+    private func menuBarImage(active: Bool) -> NSImage? {
+        let name = active ? "cup.and.saucer.fill" : "moon.zzz.fill"
+        let image = NSImage(systemSymbolName: name,
+                            accessibilityDescription: active ? "StayAwake on" : "StayAwake off")
+        image?.isTemplate = true
+        return image
+    }
+
     private func updateUI() {
         guard let button = statusItem?.button else { return }
         if !isActive {
-            button.title = "💤"
+            if let image = menuBarImage(active: false) {
+                button.image = image
+                button.title = ""
+            } else {
+                button.image = nil
+                button.title = "💤"
+            }
             button.toolTip = "StayAwake is off"
             return
         }
+        button.image = menuBarImage(active: true)
+        button.imagePosition = .imageLeading
         if let deadline {
             let left = Int(deadline.timeIntervalSinceNow)
-            button.title = "☕ " + format(left)
+            button.title = button.image == nil ? "☕ " + format(left) : format(left)
             timeLabel?.stringValue = format(left)
             statusLabel?.stringValue = "ON — holding screen awake"
             let formatter = DateFormatter()
@@ -267,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 progressBar?.doubleValue = Double(elapsed) / Double(totalSeconds) * 100
             }
         } else {
-            button.title = "☕ ∞"
+            button.title = button.image == nil ? "☕ ∞" : "∞"
             let elapsed = startedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
             timeLabel?.stringValue = format(elapsed)
             statusLabel?.stringValue = "ON — runs until you stop it"

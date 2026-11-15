@@ -18,8 +18,9 @@ tracking, and nothing sent anywhere**.
 
 ## Features
 
-- **Menu bar app, no Dock icon** — a coffee cup (☕) with a live countdown
-  while a session runs, 💤 when off.
+- **Menu bar app, no Dock icon** — a native coffee-cup glyph (SF Symbol,
+  adapts to light/dark menu bars) with a live countdown while a session
+  runs, a moon glyph when off.
 - **Preset durations** — 15 min, 30 min, 1 hour, 2 hours, 4 hours, 8 hours.
 - **Custom duration** — enter any number of minutes.
 - **Indefinite mode** — stay awake until you stop it.
@@ -43,6 +44,11 @@ tracking, and nothing sent anywhere**.
     the moment you unplug.
 - **End-of-session chime** — a soft Glass sound when a timed session
   expires, so you know it finished.
+- **Settings that stick** — the three toggles below are saved and
+  restored on relaunch, not reset every time you quit.
+- **Scriptable** — a `stayawake://` URL scheme (see *Automation* below)
+  lets Shortcuts, shell scripts, Raycast, Alfred and friends start and
+  stop sessions.
 - **Private by design** — no data collected, no settings synced, no
   network calls. The app has nothing to phone home with.
 
@@ -110,8 +116,32 @@ the menu, or **Stop** to end it on the spot.
 - Closing the mini timer panel (**Hide**) does **not** end the session —
   the countdown in the menu bar keeps running.
 - Quitting the app, shutting down, or closing the lid ends a session.
-- Settings (the three toggles) apply immediately and are remembered for
-  the next session while the app is running.
+- Settings (the three toggles) apply immediately and persist across
+  relaunches — set them once.
+
+## Automation — the `stayawake://` URL scheme
+
+StayAwake registers a URL scheme, so anything that can open a URL can
+drive it:
+
+| URL | Effect |
+| --- | --- |
+| `stayawake://activate?minutes=30` | Start a 30-minute session (any number works) |
+| `stayawake://activate` | Start an indefinite session |
+| `stayawake://deactivate` | End the current session |
+| `stayawake://toggle` | Start (indefinite) if off, stop if on |
+| `stayawake://toggle?minutes=45` | Toggle with a 45-minute session |
+
+From Terminal:
+
+```sh
+open "stayawake://activate?minutes=60"
+```
+
+In **Shortcuts**, use the *Open URLs* action with one of the URLs above —
+that is the easiest way to bind a session to a keyboard shortcut, a Focus
+mode, or a time of day. (Native App Intents would need a full Xcode
+project; the URL scheme covers the same ground for this app.)
 
 ## Limits (these are macOS limits, not app bugs)
 
@@ -157,10 +187,12 @@ an IOKit power assertion (`IOPMAssertionCreateWithName`) of type
 what the built-in `caffeinate -di` command does, wrapped in a menu bar UI
 with a countdown, a floating `NSPanel` mini timer (`.floating` level,
 `canJoinAllSpaces` + `fullScreenAuxiliary`), battery monitoring, and an
-expiry timer. `build.sh` compiles it with `swiftc`, writes the
+expiry timer. The toggles persist in `UserDefaults`, and the
+`stayawake://` URL scheme arrives as standard open-URL Apple Events.
+`build.sh` compiles it with `swiftc`, writes the
 `Info.plist` (bundle ID `io.starterdev.stayawake`, `LSUIElement` so there
-is no Dock icon, minimum macOS 11), bundles the icon, and ad-hoc signs
-the result.
+is no Dock icon, minimum macOS 11, the `stayawake` URL scheme), bundles
+the icon, and ad-hoc signs the result.
 
 ## Project layout
 
