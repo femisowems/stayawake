@@ -97,6 +97,44 @@ Tip: on macOS 13+, use the **Launch at login** toggle in the app's menu
 to start StayAwake automatically. On older systems, add it under
 **System Settings → General → Login Items**.
 
+## First launch — the "Apple could not verify" dialog
+
+If you downloaded a prebuilt `StayAwake.app` (for example the artifact
+from a CI run) instead of building it yourself, the first launch will
+likely show:
+
+> **"StayAwake" Not Opened** — Apple could not verify "StayAwake" is
+> free of malware that may harm your Mac or compromise your privacy.
+
+This is expected, and it does not mean anything is wrong with the app.
+StayAwake is signed with an ad-hoc signature, not a paid Apple Developer
+ID, and it is not notarized — so Gatekeeper blocks any *downloaded* copy
+until you approve it once. The source is right here in this repo; the
+build takes one command, and CI builds it from this exact code.
+
+**Do not click "Move to Trash."** Click **Done**, then approve it once:
+
+1. Open **System Settings → Privacy & Security**.
+2. Scroll to the **Security** section. You will see a line saying
+   "StayAwake" was blocked to protect your Mac.
+3. Click **Open Anyway**, authenticate (Touch ID or password), then
+   click **Open** in the confirmation dialog.
+
+StayAwake launches, and macOS remembers the exception — every later
+launch, including updates you replace in place in Applications, opens
+normally.
+
+**Terminal alternative** (same result, one command — it removes the
+"downloaded from the internet" quarantine flag that triggers the block):
+
+```sh
+xattr -dr com.apple.quarantine /Applications/StayAwake.app
+```
+
+**Skip the dialog entirely:** build from source instead (see *Quick
+start*). An app compiled on your own Mac is never quarantined, so it
+opens without any of this.
+
 ## How to use it
 
 Click the menu bar icon to open the menu:
@@ -167,11 +205,10 @@ project; the URL scheme covers the same ground for this app.)
 **`swiftc not found` when building**
 Run `xcode-select --install`, let it finish, then `./build.sh` again.
 
-**macOS says the app can't be opened / is from an unidentified developer**
-The app is ad-hoc signed (built locally, not notarized by Apple).
-Right-click → **Open** → **Open** the first time. If it still refuses,
-check **System Settings → Privacy & Security** for an *Open Anyway*
-button for StayAwake.
+**macOS says the app can't be opened / "Apple could not verify…"**
+The app is ad-hoc signed, not notarized by Apple. On current macOS the
+dialog has no Open button — see *First launch* above for the
+**Open Anyway** steps (or the one-line Terminal fix).
 
 **The menu bar icon doesn't appear**
 Make sure you launched the built `StayAwake.app` (not the source files).
