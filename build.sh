@@ -14,7 +14,7 @@ APP="StayAwake.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -framework Cocoa -framework IOKit \
+swiftc -O -framework Cocoa -framework IOKit -framework ServiceManagement \
   -o "$APP/Contents/MacOS/StayAwake" main.swift
 
 # App icon (coffee cup / moon / star on teal) — built from AppIcon-1024.png.

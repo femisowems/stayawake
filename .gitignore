@@ -1,0 +1,6 @@
+# Build output — produced locally by ./build.sh and by CI
+StayAwake.app/
+StayAwake.zip
+
+# macOS
+.DS_Store

@@ -1,5 +1,7 @@
 # StayAwake for Mac
 
+[![Build](https://github.com/femisowems/stayawake/actions/workflows/build.yml/badge.svg)](https://github.com/femisowems/stayawake/actions/workflows/build.yml)
+
 **Keep your Mac awake for exactly as long as you need — no more, no less.**
 
 StayAwake is a tiny, free, open-source macOS menu bar app that prevents your
@@ -49,6 +51,10 @@ tracking, and nothing sent anywhere**.
 - **Scriptable** — a `stayawake://` URL scheme (see *Automation* below)
   lets Shortcuts, shell scripts, Raycast, Alfred and friends start and
   stop sessions.
+- **Launch at login** — a menu toggle (macOS 13+) so StayAwake is
+  already in your menu bar when you log in. Every push to this repo is
+  also compiled by GitHub Actions on a macOS runner, with the built app
+  attached to the run as a downloadable artifact.
 - **Private by design** — no data collected, no settings synced, no
   network calls. The app has nothing to phone home with.
 
@@ -87,7 +93,8 @@ xcode-select --install
    if macOS refuses to open it or shows a warning, **right-click the app
    → Open → Open** once. After that it launches normally.
 
-Tip: to start StayAwake automatically at login, add it under
+Tip: on macOS 13+, use the **Launch at login** toggle in the app's menu
+to start StayAwake automatically. On older systems, add it under
 **System Settings → General → Login Items**.
 
 ## How to use it
@@ -104,6 +111,7 @@ Click the menu bar icon to open the menu:
 | **Allow display to sleep while awake** | Toggle: system stays awake, screen may sleep. |
 | **Stop on low battery (≤20%)** | Toggle: auto-stop at 20% battery while unplugged (default on). |
 | **Deactivate when switching to battery** | Toggle: end the session when unplugged (default off). |
+| **Launch at login** | Toggle automatic start at login (macOS 13+). The menu also shows the current version at the top. |
 | **Quit StayAwake** | Quit the app (also ends any session). |
 
 While a session runs, the menu bar shows ☕ plus the time remaining, and
@@ -202,6 +210,8 @@ the icon, and ad-hoc signs the result.
 ├── build.sh       # one-command build: ./build.sh → StayAwake.app
 ├── AppIcon.icns   # bundled app icon (all macOS sizes)
 ├── AppIcon-1024.png
+├── .github/workflows/build.yml   # CI: compiles the app on every push
+├── LICENSE        # MIT
 └── README.md
 ```
 

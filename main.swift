@@ -13,12 +13,15 @@
 //   - URL scheme for automation: stayawake://activate?minutes=30,
 //     stayawake://deactivate, stayawake://toggle (works from Shortcuts,
 //     scripts, Raycast, Alfred…)
+//   - Launch at login toggle (SMAppService, macOS 13+; older systems use
+//     System Settings → Login Items) and a version line in the menu
 //   - End-of-session chime
 //
 // Build with ./build.sh (swiftc, Xcode Command Line Tools). No dependencies.
 
 import Cocoa
 import IOKit.pwr_mgt
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: State
@@ -347,6 +350,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1"
+        let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
         menu.addItem(.separator())
 
         let presets: [(String, Int)] = [
@@ -403,6 +410,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(guardItem)
 
         menu.addItem(.separator())
+
+        let login = NSMenuItem(title: "Launch at login",
+                               action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        login.target = self
+        if #available(macOS 13.0, *) {
+            login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        } else {
+            // SMAppService needs macOS 13; older systems add the app via
+            // System Settings → General → Login Items instead.
+            login.isEnabled = false
+        }
+        menu.addItem(login)
+
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit StayAwake", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -445,6 +466,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleOffOnBattery() { offOnBattery.toggle(); buildMenu() }
     @objc private func toggleLowBatteryGuard() { lowBatteryGuard.toggle(); buildMenu() }
+
+    @objc private func toggleLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            do {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                } else {
+                    try SMAppService.mainApp.register()
+                }
+            } catch {
+                // Registration fails when the app isn't running from a
+                // stable location (e.g. not yet in /Applications). The
+                // menu is rebuilt below, so its checkmark always reflects
+                // the service's real status.
+            }
+        }
+        buildMenu()
+    }
     @objc private func quitClicked() { deactivate(); NSApp.terminate(nil) }
 }
 
