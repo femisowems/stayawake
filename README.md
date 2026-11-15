@@ -111,19 +111,54 @@ first, wait for Apple's installer to finish, then run `./build.sh` again:
 xcode-select --install
 ```
 
-## Installing
+## Installing on your MacBook
 
-1. Drag **`StayAwake.app`** into your **Applications** folder.
-2. Double-click it. A ☕ (or 💤) appears in your menu bar — there is no
-   window and no Dock icon; the app lives entirely in the menu bar.
-3. **First launch:** the build is ad-hoc signed rather than notarized,
-   so a *downloaded* copy is blocked by Gatekeeper until you approve it
-   once — see *First launch* below for the exact steps. (A copy you
-   built yourself opens with no warning at all.)
+### Option A — Download the ready-made app (no Terminal needed)
 
-Tip: on macOS 13+, use the **Launch at login** toggle in the app's menu
-to start StayAwake automatically. On older systems, add it under
-**System Settings → General → Login Items**.
+1. Go to the [**latest release**](https://github.com/femisowems/stayawake/releases/latest)
+   and download **`StayAwake-app.zip`**. It lands in your **Downloads**
+   folder.
+2. Double-click `StayAwake-app.zip` to unzip it. Inside the folder it
+   creates is a second zip, **`StayAwake.zip`** — double-click that one
+   too. You now have **`StayAwake.app`**. (Two zips is just how the
+   download is packaged; nothing is wrong.)
+3. Drag **`StayAwake.app`** into your **Applications** folder.
+4. Open **Applications** and double-click **StayAwake**.
+5. The first time only, macOS will say *"Apple could not verify
+   StayAwake"* — this is expected for a free app that isn't notarized.
+   **Don't click "Move to Trash."** Click **Done**, then go to
+   **System Settings → Privacy & Security**, scroll to the **Security**
+   section, click **Open Anyway**, and confirm with **Open**. The full
+   walkthrough, with a Terminal alternative, is in *First launch*
+   below. You only do this once — later launches and updates open
+   normally.
+6. StayAwake is running when you see ☕ (or 💤 while it's off) in your
+   **menu bar** at the top-right of the screen. There is no window and
+   no Dock icon — click the menu bar icon for durations, the mini
+   timer, and Settings.
+
+Optional: to have StayAwake start by itself when you log in, open its
+menu and turn on **Launch at login** (macOS 13+), or add it under
+**System Settings → General → Login Items** on older systems.
+
+### Option B — Build it yourself
+
+Follow *Quick start* above to produce `StayAwake.app`, then drag it
+into **Applications** and double-click it. A copy you build on your own
+Mac is never blocked by Gatekeeper, so step 5 above doesn't apply.
+
+### Updating
+
+Download the newer release, quit StayAwake from its menu bar icon,
+drag the new `StayAwake.app` into **Applications** and choose
+**Replace**, then launch it again. Your settings carry over — they're
+stored outside the app.
+
+### Uninstalling
+
+Quit StayAwake from its menu bar icon, then drag `StayAwake.app` from
+**Applications** to the Trash. To remove its settings too, run
+`defaults delete io.starterdev.stayawake` in Terminal.
 
 ## First launch — the "Apple could not verify" dialog
 
