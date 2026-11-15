@@ -16,6 +16,16 @@ underlying macOS mechanism (IOKit power assertions — the system API behind
 `caffeinate`), in a single Swift file with **no dependencies, no account, no
 tracking, and nothing sent anywhere**.
 
+![The StayAwake mini timer in the Daylight theme](screenshot-mini-timer.png)
+
+*The floating mini timer (Daylight theme) — always on top, with the live
+countdown, the end time, and Hide / +15 min / Stop controls.*
+
+![StayAwake Settings, Appearance tab](screenshot-settings.png)
+
+*Settings → Appearance: the four themes as swatches, with a live preview
+of the mini timer restyling as you pick.*
+
 ---
 
 ## Features
@@ -46,8 +56,9 @@ tracking, and nothing sent anywhere**.
     the moment you unplug.
 - **End-of-session chime** — a soft Glass sound when a timed session
   expires, so you know it finished.
-- **Settings that stick** — the three toggles below are saved and
-  restored on relaunch, not reset every time you quit.
+- **Settings that stick** — every preference (toggles, theme, hotkey,
+  default duration) is saved and restored on relaunch, not reset every
+  time you quit.
 - **Scriptable** — a `stayawake://` URL scheme (see *Automation* below)
   lets Shortcuts, shell scripts, Raycast, Alfred and friends start and
   stop sessions.
@@ -105,9 +116,10 @@ xcode-select --install
 1. Drag **`StayAwake.app`** into your **Applications** folder.
 2. Double-click it. A ☕ (or 💤) appears in your menu bar — there is no
    window and no Dock icon; the app lives entirely in the menu bar.
-3. **First launch:** the build is ad-hoc signed rather than notarized, so
-   if macOS refuses to open it or shows a warning, **right-click the app
-   → Open → Open** once. After that it launches normally.
+3. **First launch:** the build is ad-hoc signed rather than notarized,
+   so a *downloaded* copy is blocked by Gatekeeper until you approve it
+   once — see *First launch* below for the exact steps. (A copy you
+   built yourself opens with no warning at all.)
 
 Tip: on macOS 13+, use the **Launch at login** toggle in the app's menu
 to start StayAwake automatically. On older systems, add it under
@@ -180,8 +192,8 @@ the menu, or **Stop** to end it on the spot.
 - Closing the mini timer panel (**Hide**) does **not** end the session —
   the countdown in the menu bar keeps running.
 - Quitting the app, shutting down, or closing the lid ends a session.
-- Settings (the three toggles) apply immediately and persist across
-  relaunches — set them once.
+- Settings apply immediately and persist across relaunches — set them
+  once.
 
 ## Automation — the `stayawake://` URL scheme
 
@@ -243,7 +255,7 @@ Open an issue — or edit `main.swift`; it is one file on purpose.
 
 ## How it works
 
-StayAwake is a single-file AppKit app (`main.swift`, ~400 lines). It holds
+StayAwake is a single-file AppKit app (`main.swift`, ~1,200 lines). It holds
 an IOKit power assertion (`IOPMAssertionCreateWithName`) of type
 `PreventUserIdleSystemSleep` for the session, plus
 `PreventUserIdleDisplaySleep` unless display sleep is allowed — exactly
@@ -265,18 +277,23 @@ the icon, and ad-hoc signs the result.
 ├── build.sh       # one-command build: ./build.sh → StayAwake.app
 ├── AppIcon.icns   # bundled app icon (all macOS sizes)
 ├── AppIcon-1024.png
+├── screenshot-mini-timer.png   # the floating mini timer (Daylight)
+├── screenshot-settings.png     # Settings → Appearance, live theme preview
 ├── .github/workflows/build.yml   # CI: compiles the app on every push
 ├── LICENSE        # MIT
 └── README.md
 ```
 
-## Why source + a build script, not a downloadable binary?
+## Downloading vs building
 
-The app was developed in a Linux workspace with no macOS toolchain, so
-the binary has to be compiled on a Mac — `build.sh` does the whole job
-in one command. The Swift source has been carefully reviewed; if
-`swiftc` prints an error on your machine, please open an issue with the
-exact output.
+Either way works. The [Releases page](https://github.com/femisowems/stayawake/releases/latest)
+carries a prebuilt `StayAwake.app` for every version — the exact build
+GitHub Actions compiled from this source (each release asset's digest
+matches its workflow run's artifact, so you can verify it yourself).
+Building from source instead takes one command (see *Quick start*) and
+has one advantage: macOS only quarantines *downloaded* files, so a copy
+you compiled yourself skips the Gatekeeper first-launch dialog
+entirely.
 
 ## Privacy
 

@@ -973,7 +973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pTrack.addSubview(pFill)
         bg.addSubview(pTrack)
         var pills: [(NSView, NSTextField)] = []
-        for (title, x, w) in [("Hide", 16.0, 64.0), ("+15 min", 196.0, 64.0), ("Stop", 268.0, 56.0)] {
+        for (title, x, w) in [("Hide", 16.0, 64.0), ("+15 min", 168.0, 64.0), ("Stop", 240.0, 64.0)] {
             let pill = NSView(frame: NSRect(x: x, y: 10, width: w, height: 22))
             pill.wantsLayer = true
             pill.layer?.cornerRadius = 6
