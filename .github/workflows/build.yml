@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build StayAwake.app
+    runs-on: macos-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Build with build.sh
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Package the app
+        run: ditto -c -k --keepParent StayAwake.app StayAwake.zip
+
+      - name: Upload the built app
+        uses: actions/upload-artifact@v4
+        with:
+          name: StayAwake-app
+          path: StayAwake.zip
+          if-no-files-found: error
