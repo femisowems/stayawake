@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                    secondaryText: rgb(1, 1, 1, 0.65),
                    accent: rgb(0.96, 0.65, 0.14),   // amber
                    track: rgb(1, 1, 1, 0.18),
-                   buttonBackground: rgb(1, 1, 1, 0.14),
+                   buttonBackground: rgb(1, 1, 1, 0.24),
                    buttonText: .white),
         PanelTheme(name: "Graphite",
                    background: rgb(0.11, 0.11, 0.12),
@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                    secondaryText: rgb(1, 1, 1, 0.60),
                    accent: rgb(0.37, 0.36, 0.90),   // indigo
                    track: rgb(1, 1, 1, 0.16),
-                   buttonBackground: rgb(1, 1, 1, 0.12),
+                   buttonBackground: rgb(1, 1, 1, 0.22),
                    buttonText: .white),
         PanelTheme(name: "Daylight",
                    background: rgb(0.98, 0.97, 0.94),
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                    secondaryText: rgb(0, 0, 0, 0.55),
                    accent: rgb(0.05, 0.45, 0.44),   // teal
                    track: rgb(0, 0, 0, 0.10),
-                   buttonBackground: rgb(0, 0, 0, 0.07),
+                   buttonBackground: rgb(0, 0, 0, 0.12),
                    buttonText: rgb(0.10, 0.10, 0.10)),
         PanelTheme(name: "Amber Dusk",
                    background: rgb(0.17, 0.10, 0.03),
@@ -99,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                    secondaryText: rgb(1, 0.96, 0.91, 0.60),
                    accent: rgb(1.0, 0.70, 0.25),    // warm amber
                    track: rgb(1, 1, 1, 0.15),
-                   buttonBackground: rgb(1, 1, 1, 0.10),
+                   buttonBackground: rgb(1, 1, 1, 0.20),
                    buttonText: rgb(1.0, 0.96, 0.91)),
     ]
 
@@ -371,6 +371,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         progressFill?.layer?.backgroundColor = theme.accent.cgColor
         for button in panelButtons {
             button.bezelColor = theme.buttonBackground
+            // contentTintColor alone does NOT recolor a push button's
+            // title — v2.2's dark themes shipped black labels on dark
+            // pills because of this. Set the title colour explicitly
+            // via attributedTitle, which the button cell always honours.
+            let title = button.title
+            button.attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.foregroundColor: theme.buttonText,
+                             .font: NSFont.systemFont(ofSize: 13)])
             button.contentTintColor = theme.buttonText
         }
     }
@@ -453,7 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.2"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.3"
         let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
