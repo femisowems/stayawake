@@ -11,10 +11,10 @@ MacBook awake during long uploads, downloads, renders, and exports while you
 step away — without digging through System Settings or leaving a
 `caffeinate` command running in a terminal you might close by accident.
 
-It does the same core job as the commercial app Lungo, using the same
-underlying macOS mechanism (IOKit power assertions — the system API behind
-`caffeinate`), in a single Swift file with **no dependencies, no account, no
-tracking, and nothing sent anywhere**.
+It uses the same underlying macOS mechanism as the system's own tools
+(IOKit power assertions — the API behind `caffeinate`), in a single Swift
+file with **no dependencies, no account, no tracking, and nothing sent
+anywhere**.
 
 ![The StayAwake mini timer in the Daylight theme](screenshot-mini-timer.png)
 
@@ -303,6 +303,5 @@ no update checker phoning home.
 
 ---
 
-Built by [Femi Sowemimo](https://github.com/femisowems) (StarterDev) as a
-free alternative to Lungo for a single job: a Mac that stays awake while
-the work finishes.
+Built by [Femi Sowemimo](https://github.com/femisowems) (StarterDev) for
+a single job: a Mac that stays awake while the work finishes.

@@ -1,7 +1,7 @@
 // StayAwake for Mac — native version of the Library app.
 // Single-file AppKit app: menu bar item + floating always-on-top mini timer.
 //
-// Features (mirroring the Library version and Lungo):
+// Features (mirroring the Library version):
 //   - Preset durations 15m / 30m / 1h / 2h / 4h / 8h, custom minutes, indefinite
 //   - IOKit power assertions keep the Mac (and optionally the display) awake
 //   - Floating mini timer panel: level .floating, joins all Spaces, visible
