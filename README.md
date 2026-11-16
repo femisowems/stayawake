@@ -1,4 +1,4 @@
-# StayAwake for Mac
+# StayAwake for MacOS
 
 [![Build](https://github.com/femisowems/stayawake/actions/workflows/build.yml/badge.svg)](https://github.com/femisowems/stayawake/actions/workflows/build.yml)
 
