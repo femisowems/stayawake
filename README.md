@@ -113,6 +113,12 @@ xcode-select --install
 
 ## Installing on your MacBook
 
+**Watch the install** (about a minute) — downloading the release, the one-time Gatekeeper approval, and the first launch:
+
+<img width="960" height="540" alt="stayawake-install-guide" src="https://github.com/user-attachments/assets/a01be673-9363-436d-8f44-569d6372c056" />
+
+▶ [Watch the same walkthrough as a video with narration (0:46)](https://github.com/user-attachments/assets/11c11a02-1045-41e9-add3-c08383c72a2b)
+
 ### Option A — Download the ready-made app (no Terminal needed)
 
 1. Go to the [**latest release**](https://github.com/femisowems/stayawake/releases/latest)
