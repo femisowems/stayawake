@@ -25,15 +25,62 @@
 //     activate-on-left-click, pause-while-locked, and a dimmed menu
 //     bar icon while off. Every setting persists and ships with a
 //     sensible default pre-selected.
+//   - One-click updates (v2.5): a public version feed is checked at
+//     launch and on demand (menu item, plus a fifth Settings tab);
+//     Install downloads the new release, verifies its SHA-256, swaps
+//     the app bundle and relaunches. Power-assertion and hotkey
+//     registration failures are checked and surfaced (also v2.5),
+//     and battery readings come from IOKit power sources instead
+//     of a pmset subprocess.
 //
 // Build with ./build.sh (swiftc, Xcode Command Line Tools). No dependencies.
 
 import Cocoa
 import Carbon
 import IOKit.pwr_mgt
+import IOKit.ps
 import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+// MARK: Pure helpers (shared with tests.swift)
+
+/// "0:00" under an hour, "1:00:00" at an hour and beyond;
+/// negative input clamps to zero.
+func formatDuration(_ seconds: Int) -> String {
+    let s = max(0, seconds)
+    if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
+    return String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// The custom-duration field: a positive whole number of minutes,
+/// or nil for anything else (empty, zero, negative, non-numeric).
+func parseCustomMinutes(_ text: String) -> Int? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let value = Int(trimmed), value > 0 else { return nil }
+    return value
+}
+
+/// Battery charge as a percentage, clamped to 0...100; nil when
+/// the capacity figures are unusable.
+func batteryPercent(current: Int, max: Int) -> Int? {
+    guard max > 0, current >= 0 else { return nil }
+    return min(100, Int((Double(current) / Double(max) * 100).rounded()))
+}
+
+/// Dotted-version compare for the update feed: true when
+/// `candidate` is strictly newer than `current`. Missing
+/// components count as 0, so "2.5" and "2.5.0" are equal.
+func isNewerVersion(_ candidate: String, than current: String) -> Bool {
+    let a = candidate.split(separator: ".").map { Int($0) ?? 0 }
+    let b = current.split(separator: ".").map { Int($0) ?? 0 }
+    for i in 0..<max(a.count, b.count) {
+        let x = i < a.count ? a[i] : 0
+        let y = i < b.count ? b[i] : 0
+        if x != y { return x > y }
+    }
+    return false
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDelegate {
     // MARK: State
     private var statusItem: NSStatusItem!
     private var assertionID: IOPMAssertionID = 0
@@ -161,12 +208,281 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// assertions are temporarily released.
     var hasSession: Bool { startedAt != nil }
 
+    // MARK: Update checker + one-click install (v2.5)
+
+    // Ported from ClipKeep's updater: a tiny public gist carries
+    // the latest version, its release-zip URL and the zip's
+    // SHA-256; the installer verifies the checksum before swapping
+    // the bundle. The feed check is the only network request the
+    // app ever makes, and it sends nothing about the user.
+    static let updateFeedURL = "https://gist.githubusercontent.com/femisowems/4ad10fc3c50a2cf11fc922d1893fbd78/raw/stayawake-version.json"
+    private var availableUpdate: (version: String, url: String, sha256: String?)?
+    private var downloadTask: URLSessionDownloadTask?
+    private var downloadSession: URLSession?
+    private var pendingUpdateVersion: String?
+    private var pendingUpdateSHA256: String?
+    private var updateWindow: NSPanel?
+    private var updateLabel: NSTextField?
+    private var updateBar: NSProgressIndicator?
+    private var updateCloseButton: NSButton?
+    private var statusFlashGeneration = 0
+    private var updateStatusText = "Updates are checked automatically at launch."
+    private var updateSnoozedUntil: Date {
+        get { Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "updateSnoozedUntil")) }
+        set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "updateSnoozedUntil") }
+    }
+
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.5.0"
+    }
+
+    func checkForUpdate(manual: Bool = false) {
+        guard let feed = URL(string: Self.updateFeedURL) else { return }
+        var request = URLRequest(url: feed)
+        request.timeoutInterval = 6
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let data,
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      // "latest" is the canonical key; "version" is
+                      // accepted too (a feed published with only the
+                      // wrong key once broke ClipKeep's checks).
+                      let latest = (obj["latest"] as? String) ?? (obj["version"] as? String),
+                      let url = obj["url"] as? String, !url.isEmpty
+                else {
+                    if manual {
+                        self.updateStatusText = "Couldn't check for updates just now."
+                        self.refreshSettingsControls()
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn't check for updates"
+                        alert.informativeText = "The version feed couldn't be reached. Check your connection and try again."
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    }
+                    return
+                }
+                let sha = obj["sha256"] as? String
+                if isNewerVersion(latest, than: self.currentVersion) {
+                    self.availableUpdate = (latest, url, sha)
+                    self.updateStatusText = "StayAwake \(latest) is available — choose Install to update."
+                    let dismissed = UserDefaults.standard.string(forKey: "dismissedUpdateVersion") == latest
+                    let snoozed = Date() < self.updateSnoozedUntil
+                    if manual || (!dismissed && !snoozed) { self.promptForUpdate() }
+                } else {
+                    self.availableUpdate = nil
+                    self.updateStatusText = "You're up to date (StayAwake \(self.currentVersion))."
+                    if manual { self.flashUpToDate() }
+                }
+                self.refreshSettingsControls()
+            }
+        }.resume()
+    }
+
+    private func promptForUpdate() {
+        guard let upd = availableUpdate else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "StayAwake \(upd.version) is available"
+        alert.informativeText = "You're running StayAwake \(currentVersion). Install downloads the update, verifies it against the feed's checksum, swaps the app and relaunches it — your settings carry over."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "Skip This Version")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            startUpdateDownload()
+        case .alertSecondButtonReturn:
+            updateSnoozedUntil = Date().addingTimeInterval(24 * 3600)
+        default:
+            UserDefaults.standard.set(upd.version, forKey: "dismissedUpdateVersion")
+        }
+    }
+
+    /// A manual check that finds nothing still answers: the menu
+    /// bar title flashes "✓ Up to date" for a couple of seconds,
+    /// then the normal display restores itself.
+    private func flashUpToDate() {
+        guard let button = statusItem?.button else { return }
+        statusFlashGeneration += 1
+        let generation = statusFlashGeneration
+        button.image = nil
+        button.title = "✓ Up to date"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            guard let self, self.statusFlashGeneration == generation else { return }
+            self.updateUI()
+        }
+    }
+
+    @objc private func updateCheckClicked() { checkForUpdate(manual: true) }
+
+    private func startUpdateDownload() {
+        guard downloadTask == nil,
+              let upd = availableUpdate, let url = URL(string: upd.url) else { return }
+        pendingUpdateVersion = upd.version
+        pendingUpdateSHA256 = upd.sha256
+        showUpdatePanel(message: "Downloading StayAwake \(upd.version)…")
+        updateBar?.isIndeterminate = false
+        updateBar?.doubleValue = 0
+        let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+        downloadSession = session
+        downloadTask = session.downloadTask(with: url)
+        downloadTask?.resume()
+    }
+
+    private func showUpdatePanel(message: String) {
+        if updateWindow == nil {
+            let w = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 118),
+                            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+            w.title = "StayAwake Update"
+            w.level = .floating
+            w.isReleasedWhenClosed = false
+            let label = NSTextField(wrappingLabelWithString: message)
+            label.frame = NSRect(x: 20, y: 64, width: 320, height: 38)
+            w.contentView?.addSubview(label)
+            let bar = NSProgressIndicator(frame: NSRect(x: 20, y: 38, width: 320, height: 16))
+            bar.style = .bar
+            bar.minValue = 0
+            bar.maxValue = 100
+            w.contentView?.addSubview(bar)
+            let close = NSButton(title: "Close", target: self, action: #selector(closeUpdatePanel))
+            close.frame = NSRect(x: 268, y: 6, width: 72, height: 26)
+            close.bezelStyle = .rounded
+            close.isHidden = true
+            w.contentView?.addSubview(close)
+            updateWindow = w
+            updateLabel = label
+            updateBar = bar
+            updateCloseButton = close
+        }
+        updateLabel?.stringValue = message
+        updateBar?.isHidden = false
+        updateCloseButton?.isHidden = true
+        updateWindow?.center()
+        updateWindow?.orderFrontRegardless()
+    }
+
+    @objc private func closeUpdatePanel() { updateWindow?.orderOut(nil) }
+
+    private func updateFailed(_ message: String) {
+        downloadTask = nil
+        downloadSession = nil
+        if updateWindow == nil { showUpdatePanel(message: "") }
+        updateLabel?.stringValue = "Update failed: \(message)"
+        updateBar?.isHidden = true
+        updateCloseButton?.isHidden = false
+        updateStatusText = "The last update attempt failed: \(message)"
+        refreshSettingsControls()
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let pct = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        updateBar?.isIndeterminate = false
+        updateBar?.doubleValue = pct * 100
+        updateLabel?.stringValue = "Downloading StayAwake \(pendingUpdateVersion ?? "")… \(Int(pct * 100))%"
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        let version = pendingUpdateVersion ?? "update"
+        updateLabel?.stringValue = "Installing StayAwake \(version)…"
+        updateBar?.isIndeterminate = true
+        do {
+            try installDownloadedUpdate(zipAt: location, version: version, expectedSHA256: pendingUpdateSHA256)
+        } catch {
+            updateFailed(error.localizedDescription)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { updateFailed(error.localizedDescription) }
+        if downloadTask != nil {
+            downloadTask = nil
+            downloadSession = nil
+        }
+    }
+
+    // SHA-256 of a file via the system shasum tool — the app
+    // already shells out to ditto for the unzip, so this adds no
+    // new linked dependency. Lowercase hex, or nil on failure.
+    private func sha256(ofFile url: URL) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+        p.arguments = ["-a", "256", url.path]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        guard (try? p.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0,
+              let out = String(data: data, encoding: .utf8) else { return nil }
+        return out.split(separator: " ").first.map(String.init)?.lowercased()
+    }
+
+    // Replace the running app with the downloaded one: unzip to
+    // a staging folder, then a detached script waits for this
+    // process to exit, swaps the bundles (keeping a backup until
+    // the new one is in place), and relaunches. When the feed
+    // published a sha256 for this release, the download is
+    // verified against it first and a mismatch aborts the
+    // install before anything is unzipped or swapped.
+    private func installDownloadedUpdate(zipAt zipURL: URL, version: String, expectedSHA256: String?) throws {
+        let fm = FileManager.default
+        let stage = fm.temporaryDirectory.appendingPathComponent("stayawake-update-\(version)")
+        try? fm.removeItem(at: stage)
+        try fm.createDirectory(at: stage, withIntermediateDirectories: true)
+        // The download task's temp file vanishes when this
+        // delegate returns, so move it into staging first.
+        let stagedZip = stage.appendingPathComponent("update.zip")
+        try fm.copyItem(at: zipURL, to: stagedZip)
+        if let expected = expectedSHA256, !expected.isEmpty {
+            guard let actual = sha256(ofFile: stagedZip), actual == expected.lowercased() else {
+                throw NSError(domain: "StayAwakeUpdate", code: 3, userInfo: [NSLocalizedDescriptionKey: "checksum mismatch — the download was discarded"])
+            }
+        }
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", stagedZip.path, stage.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        guard unzip.terminationStatus == 0 else {
+            throw NSError(domain: "StayAwakeUpdate", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't unzip the download"])
+        }
+        let newApp = stage.appendingPathComponent("StayAwake.app")
+        guard fm.fileExists(atPath: newApp.path) else {
+            throw NSError(domain: "StayAwakeUpdate", code: 2, userInfo: [NSLocalizedDescriptionKey: "the download didn't contain the app"])
+        }
+        let current = Bundle.main.bundlePath
+        let backup = current + ".bak"
+        let script = """
+        #!/bin/bash
+        while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.3; done
+        rm -rf "\(backup)"
+        mv "\(current)" "\(backup)"
+        if mv "\(newApp.path)" "\(current)"; then
+          rm -rf "\(backup)"
+          open "\(current)"
+        else
+          mv "\(backup)" "\(current)"
+          open "\(newApp.path)"
+        fi
+        """
+        let scriptURL = stage.appendingPathComponent("swap.sh")
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        let run = Process()
+        run.executableURL = URL(fileURLWithPath: "/bin/bash")
+        run.arguments = [scriptURL.path]
+        try run.run()
+        NSApp.terminate(nil)
+    }
+
     // MARK: Settings window / hotkey / lock-pause state
     private var mainMenu: NSMenu?
     private var pausedForLock = false
     private var lockPausedAt: Date?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerRef: EventHandlerRef?
+    private var hotkeyFailureReported = false
     private var settingsWindow: NSWindow?
     private var genLaunchLoginBox: NSButton?
     private var genActivateAtLaunchBox: NSButton?
@@ -178,6 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var advOffBatteryBox: NSButton?
     private var advLowBatteryBox: NSButton?
     private var advChimeBox: NSButton?
+    private var updatesStatusLabel: NSTextField?
     private var appDimIconBox: NSButton?
     private var swatchButtons: [NSButton] = []
     private var previewBG: NSView?
@@ -263,6 +580,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if activateAtLaunch {
             activate(minutes: defaultMinutes)
         }
+        // Silent update check shortly after launch (v2.5); the
+        // prompt itself is suppressed while snoozed or dismissed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            self?.checkForUpdate()
+        }
     }
 
     // MARK: URL scheme — stayawake://activate?minutes=30 / deactivate / toggle
@@ -290,19 +612,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Power assertions
-    private func createAssertions() {
-        IOPMAssertionCreateWithName(
+    /// Creates the sleep-prevention assertions. Returns false when
+    /// macOS refuses the system assertion — a session cannot work
+    /// without it, and since v2.5 the result is checked and
+    /// surfaced instead of silently leaving the Mac able to sleep
+    /// while the UI claims a session is running.
+    @discardableResult
+    private func createAssertions() -> Bool {
+        let systemResult = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
             "StayAwake is keeping this Mac awake" as CFString,
             &assertionID)
+        guard systemResult == kIOReturnSuccess else {
+            assertionID = 0
+            NSLog("StayAwake: system-sleep assertion failed (IOPM error \(systemResult))")
+            return false
+        }
         if !allowDisplaySleep {
-            IOPMAssertionCreateWithName(
+            let displayResult = IOPMAssertionCreateWithName(
                 kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                 IOPMAssertionLevel(kIOPMAssertionLevelOn),
                 "StayAwake is keeping the display awake" as CFString,
                 &displayAssertionID)
+            if displayResult != kIOReturnSuccess {
+                // The system stays awake regardless; only the
+                // display guarantee is lost, so log it and go on.
+                displayAssertionID = 0
+                NSLog("StayAwake: display-sleep assertion failed (IOPM error \(displayResult))")
+            }
         }
+        return true
+    }
+
+    /// Tells the user a session couldn't (or can no longer) hold
+    /// the Mac awake, and stops the session so the UI never claims
+    /// otherwise.
+    private func sleepAssertionFailed() {
+        deactivate()
+        let alert = NSAlert()
+        alert.messageText = "StayAwake couldn't keep this Mac awake"
+        alert.informativeText = "macOS refused the sleep-prevention request, so the session has been stopped. Please try again — if it keeps happening, restarting the Mac usually clears it."
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     private func releaseAssertions() {
@@ -315,7 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         releaseAssertions()
         pausedForLock = false
         lockPausedAt = nil
-        createAssertions()
+        guard createAssertions() else { sleepAssertionFailed(); return }
         startedAt = Date()
         if minutes > 0 {
             totalSeconds = minutes * 60
@@ -377,28 +730,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateUI()
     }
 
-    /// Returns (percent charged if readable, true if currently drawing from battery).
+    /// Returns (percent charged if readable, true if currently
+    /// drawing from battery). Reads the power-source snapshot from
+    /// IOKit (v2.5) — the old version spawned /usr/bin/pmset and
+    /// blocked on it every 10 seconds. A Mac with no battery (a
+    /// desktop) reports (nil, false).
     private func batteryInfo() -> (Int?, Bool) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-        process.arguments = ["-g", "batt"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do { try process.run() } catch { return (nil, false) }
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
-        let onBattery = text.contains("Battery Power")
-        var percent: Int? = nil
-        if let range = text.range(of: "%") {
-            let before = text[text.startIndex..<range.lowerBound]
-            let digits = before.reversed().prefix { $0.isNumber }
-            if !digits.isEmpty {
-                percent = Int(String(digits.reversed()))
-            }
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef]
+        else { return (nil, false) }
+        for source in sources {
+            guard let desc = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any],
+                  let current = desc[kIOPSCurrentCapacityKey] as? Int,
+                  let maxCapacity = desc[kIOPSMaxCapacityKey] as? Int
+            else { continue }
+            let onBattery = (desc[kIOPSPowerSourceStateKey] as? String) == kIOPSBatteryPowerValue
+            return (batteryPercent(current: current, max: maxCapacity), onBattery)
         }
-        return (percent, onBattery)
+        return (nil, false)
     }
 
     // MARK: Floating mini timer panel (the "always on top" part)
@@ -529,11 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func stopClicked() { deactivate() }
 
     // MARK: UI updates
-    private func format(_ seconds: Int) -> String {
-        let s = max(0, seconds)
-        if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
-        return String(format: "%d:%02d", s / 60, s % 60)
-    }
+    private func format(_ seconds: Int) -> String { formatDuration(seconds) }
 
     /// Native menu bar glyph (SF Symbol, template-rendered so it adapts
     /// to light/dark menu bars) instead of an emoji. Falls back to the
@@ -614,8 +959,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.4"
-        let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
+        let versionItem = NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
         menu.addItem(.separator())
@@ -704,6 +1048,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.target = self
         menu.addItem(settings)
 
+        let updates = NSMenuItem(title: "Check for Updates…",
+                                 action: #selector(updateCheckClicked), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
+
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit StayAwake", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
@@ -730,7 +1079,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.accessoryView = field
         alert.addButton(withTitle: "Activate")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn, let mins = Int(field.stringValue), mins > 0 {
+        if alert.runModal() == .alertFirstButtonReturn, let mins = parseCustomMinutes(field.stringValue) {
             activate(minutes: mins)
         }
     }
@@ -741,10 +1090,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         allowDisplaySleep.toggle()
         if isActive {
             // Re-create assertions under the new setting, keeping the session.
-            let wasIndefinite = isIndefinite
             releaseAssertions()
-            createAssertions()
-            _ = wasIndefinite
+            if !createAssertions() { sleepAssertionFailed() }
         }
         buildMenu()
     }
@@ -804,18 +1151,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hotKeyHandlerRef == nil {
             var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                      eventKind: UInt32(kEventHotKeyPressed))
-            InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
+            let handlerStatus = InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
                 guard let userData else { return noErr }
                 Unmanaged<AppDelegate>.fromOpaque(userData)
                     .takeUnretainedValue().hotkeyPressed()
                 return noErr
             }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandlerRef)
+            if handlerStatus != noErr {
+                NSLog("StayAwake: hotkey event handler install failed (OSStatus \(handlerStatus))")
+            }
         }
         var hotKeyID = EventHotKeyID()
         hotKeyID.signature = 0x5341574B // 'SAWK'
         hotKeyID.id = 1
-        RegisterEventHotKey(UInt32(hotkeyKeyCode), UInt32(hotkeyModifiers), hotKeyID,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        let status = RegisterEventHotKey(UInt32(hotkeyKeyCode), UInt32(hotkeyModifiers), hotKeyID,
+                                         GetApplicationEventTarget(), 0, &hotKeyRef)
+        // Registration results are checked since v2.5 (the same
+        // fix ClipKeep shipped in its v2.16.0): a shortcut another
+        // app already owns fails here, and the user hears about it
+        // once instead of the hotkey silently doing nothing.
+        if status == noErr {
+            hotkeyFailureReported = false
+        } else {
+            hotKeyRef = nil
+            NSLog("StayAwake: hotkey registration failed (OSStatus \(status))")
+            if !hotkeyFailureReported {
+                hotkeyFailureReported = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let alert = NSAlert()
+                    alert.messageText = "Your StayAwake shortcut couldn't be registered"
+                    alert.informativeText = "The shortcut \(self.shortcutDisplayString() ?? "") may already be used by another app. StayAwake still works from its menu — you can pick a different shortcut in Settings → Shortcuts."
+                    alert.addButton(withTitle: "OK")
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     private func unregisterHotkey() {
@@ -827,7 +1199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hotkeyPressed() { toggleDefault() }
 
-    private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> Int {
+    static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> Int {
         var m = 0
         if flags.contains(.control) { m |= 4096 } // controlKey
         if flags.contains(.option) { m |= 2048 }  // optionKey
@@ -876,7 +1248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Freeze-frame the session across the locked interval.
             if let d = deadline { deadline = d.addingTimeInterval(lockedFor) }
             if let s = startedAt { startedAt = s.addingTimeInterval(lockedFor) }
-            createAssertions()
+            if !createAssertions() { sleepAssertionFailed() }
         }
         updateUI()
     }
@@ -1036,6 +1408,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         advanced.addSubview(advChimeBox!)
         advanced.addSubview(caption("The default duration is what the hotkey, left-click activation, and Activate at launch use.", 30, 26))
 
+        // — Updates —
+        let updates = NSView()
+        let updVersion = NSTextField(labelWithString: "StayAwake \(currentVersion)")
+        updVersion.frame = NSRect(x: 24, y: 248, width: 404, height: 20)
+        updVersion.font = .systemFont(ofSize: 13, weight: .bold)
+        updates.addSubview(updVersion)
+        let updStatus = NSTextField(wrappingLabelWithString: updateStatusText)
+        updStatus.frame = NSRect(x: 24, y: 198, width: 404, height: 42)
+        updStatus.font = .systemFont(ofSize: 12)
+        updates.addSubview(updStatus)
+        updatesStatusLabel = updStatus
+        let updButton = NSButton(title: "Check for Updates…", target: self, action: #selector(updateCheckClicked))
+        updButton.frame = NSRect(x: 24, y: 158, width: 180, height: 30)
+        updButton.bezelStyle = .rounded
+        updates.addSubview(updButton)
+        updates.addSubview(caption("StayAwake checks a small public version feed — the only network request it ever makes, and it sends nothing about you or your Mac. Downloads are verified against the feed's SHA-256 checksum before they install.", 92, 56))
+
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "StayAwake Settings"
@@ -1046,6 +1435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tabView.addTabViewItem(tab("Appearance", "paintpalette", appearance))
         tabView.addTabViewItem(tab("Shortcuts", "command", shortcuts))
         tabView.addTabViewItem(tab("Advanced", "slider.horizontal.3", advanced))
+        tabView.addTabViewItem(tab("Updates", "arrow.down.circle", updates))
         w.contentView = tabView
         settingsWindow = w
     }
@@ -1087,6 +1477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         advOffBatteryBox?.state = offOnBattery ? .on : .off
         advLowBatteryBox?.state = lowBatteryGuard ? .on : .off
         advChimeBox?.state = chimeOnEnd ? .on : .off
+        updatesStatusLabel?.stringValue = updateStatusText
         appDimIconBox?.state = dimIconWhenOff ? .on : .off
         for (i, b) in swatchButtons.enumerated() {
             b.state = themes[i].name == themeName ? .on : .off
@@ -1117,7 +1508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         allowDisplaySleep = sender.state == .on
         if isActive {
             releaseAssertions()
-            createAssertions()
+            if !createAssertions() { sleepAssertionFailed() }
         }
         buildMenu()
     }
@@ -1191,6 +1582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Main
 let delegate = AppDelegate()
 let app = NSApplication.shared
 app.delegate = delegate
