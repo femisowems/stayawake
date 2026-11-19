@@ -1,8 +1,17 @@
-# StayAwake for MacOS
+<p align="center">
+  <img src="AppIcon-1024.png" width="160" alt="StayAwake app icon">
+</p>
 
-[![Build](https://github.com/femisowems/stayawake/actions/workflows/build.yml/badge.svg)](https://github.com/femisowems/stayawake/actions/workflows/build.yml)
+<h1 align="center">StayAwake for Mac</h1>
 
-**Keep your Mac awake for exactly as long as you need — no more, no less.**
+<p align="center">
+  <strong>Keep your Mac awake for exactly as long as you need — no more, no less.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/femisowems/stayawake/actions/workflows/build.yml"><img src="https://github.com/femisowems/stayawake/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/femisowems/stayawake/releases"><img src="https://img.shields.io/badge/version-v2.5.0-0f766e" alt="Version v2.5.0"></a>
+</p>
 
 StayAwake is a tiny, free, open-source macOS menu bar app that prevents your
 Mac (and optionally its display) from sleeping for a preset time, a custom
@@ -73,17 +82,27 @@ of the mini timer restyling as you pick.*
   readable against any desktop — the old translucent HUD could wash its
   white text out to near-invisible on light backgrounds.
 - **A Settings window of its own** — **Settings…** (⌘,) opens a
-  four-tab window: *General* (launch at login, activate at launch,
+  five-tab window: *General* (launch at login, activate at launch,
   activate on left-click, mini timer on start), *Appearance* (the four
   themes as swatches with a **live preview** of the mini timer, plus a
   dimmed menu bar icon while off), *Shortcuts* (a recordable global
-  hotkey, ⌃⌥⌘S by default), and *Advanced* (default duration, display
+  hotkey, ⌃⌥⌘S by default), *Advanced* (default duration, display
   sleep, pause while the screen is locked, battery options, end-of-
-  session sound). Every setting ships with a sensible default already
+  session sound), and *Updates* (the current version, update status,
+  and a Check for Updates button). Every setting ships with a sensible default already
   selected and persists between launches; on an existing install the
   window simply shows your current values.
-- **Private by design** — no data collected, no settings synced, no
-  network calls. The app has nothing to phone home with.
+- **One-click updates** (v2.5) — StayAwake checks a small public
+  version feed at launch and on demand (**Check for Updates…** in
+  the menu, or Settings → Updates). Install downloads the new
+  release, verifies its SHA-256 checksum, swaps the app and
+  relaunches it — no manual re-download. *Later* snoozes the
+  prompt for a day; *Skip This Version* silences it for that
+  release only.
+- **Private by design** — no data collected, no settings synced,
+  no analytics. The only network request the app ever makes is
+  the update check above, and it sends nothing about you or
+  your Mac.
 
 ## Requirements
 
@@ -124,10 +143,8 @@ xcode-select --install
 1. Go to the [**latest release**](https://github.com/femisowems/stayawake/releases/latest)
    and download **`StayAwake-app.zip`**. It lands in your **Downloads**
    folder.
-2. Double-click `StayAwake-app.zip` to unzip it. Inside the folder it
-   creates is a second zip, **`StayAwake.zip`** — double-click that one
-   too. You now have **`StayAwake.app`**. (Two zips is just how the
-   download is packaged; nothing is wrong.)
+2. Double-click `StayAwake-app.zip` to unzip it. You now have
+   **`StayAwake.app`**.
 3. Drag **`StayAwake.app`** into your **Applications** folder.
 4. Open **Applications** and double-click **StayAwake**.
 5. The first time only, macOS will say *"Apple could not verify
@@ -155,10 +172,18 @@ Mac is never blocked by Gatekeeper, so step 5 above doesn't apply.
 
 ### Updating
 
-Download the newer release, quit StayAwake from its menu bar icon,
-drag the new `StayAwake.app` into **Applications** and choose
-**Replace**, then launch it again. Your settings carry over — they're
-stored outside the app.
+From v2.5 on, StayAwake updates itself: when a new version is
+available it offers **Install** (in the launch prompt, from
+**Check for Updates…** in the menu, or in Settings → Updates).
+The download is verified against the release's SHA-256 checksum,
+then the app swaps itself and relaunches. Your settings carry
+over — they're stored outside the app.
+
+Updating *from* v2.4 or earlier is manual one last time (those
+versions have no updater): download the newer release, quit
+StayAwake from its menu bar icon, drag the new `StayAwake.app`
+into **Applications** and choose **Replace**, then launch it
+again.
 
 ### Uninstalling
 
@@ -220,7 +245,8 @@ Click the menu bar icon to open the menu:
 | **Deactivate when switching to battery** | Toggle: end the session when unplugged (default off). |
 | **Theme →** | Pick the mini timer's colour theme: Midnight Teal, Graphite, Daylight, or Amber Dusk. |
 | **Launch at login** | Toggle automatic start at login (macOS 13+). The menu also shows the current version at the top. |
-| **Settings…** (⌘,) | Open the Settings window: General, Appearance (theme swatches with a live mini-timer preview), Shortcuts (recordable global hotkey, ⌃⌥⌘S by default), and Advanced (default duration, pause while locked, battery options, end-of-session sound). |
+| **Settings…** (⌘,) | Open the Settings window: General, Appearance (theme swatches with a live mini-timer preview), Shortcuts (recordable global hotkey, ⌃⌥⌘S by default), Advanced (default duration, pause while locked, battery options, end-of-session sound), and Updates (version, update status, check button). |
+| **Check for Updates…** | Check the version feed now; offers a one-click install when a newer version exists, and flashes "✓ Up to date" in the menu bar when it doesn't. |
 | **Quit StayAwake** | Quit the app (also ends any session). |
 
 While a session runs, the menu bar shows ☕ plus the time remaining, and
@@ -296,7 +322,7 @@ Open an issue — or edit `main.swift`; it is one file on purpose.
 
 ## How it works
 
-StayAwake is a single-file AppKit app (`main.swift`, ~1,200 lines). It holds
+StayAwake is a single-file AppKit app (`main.swift`). It holds
 an IOKit power assertion (`IOPMAssertionCreateWithName`) of type
 `PreventUserIdleSystemSleep` for the session, plus
 `PreventUserIdleDisplaySleep` unless display sleep is allowed — exactly
@@ -308,7 +334,10 @@ expiry timer. The toggles persist in `UserDefaults`, and the
 `build.sh` compiles it with `swiftc`, writes the
 `Info.plist` (bundle ID `io.starterdev.stayawake`, `LSUIElement` so there
 is no Dock icon, minimum macOS 11, the `stayawake` URL scheme), bundles
-the icon, and ad-hoc signs the result.
+the icon, and ad-hoc signs the result. Since v2.5 the update checker
+reads a public version feed (a GitHub gist) and verifies each download
+by SHA-256 before swapping the bundle; the app's pure logic is covered
+by `tests.swift`, which CI runs before every build.
 
 ## Project layout
 
@@ -316,11 +345,13 @@ the icon, and ad-hoc signs the result.
 .
 ├── main.swift     # the entire app
 ├── build.sh       # one-command build: ./build.sh → StayAwake.app
+├── tests.swift    # logic tests (CI runs them before the build)
+├── run-tests.sh   # bash run-tests.sh
 ├── AppIcon.icns   # bundled app icon (all macOS sizes)
 ├── AppIcon-1024.png
 ├── screenshot-mini-timer.png   # the floating mini timer (Daylight)
 ├── screenshot-settings.png     # Settings → Appearance, live theme preview
-├── .github/workflows/build.yml   # CI: compiles the app on every push
+├── .github/workflows/build.yml   # CI: logic tests, then compiles the app on every push
 ├── LICENSE        # MIT
 └── README.md
 ```
@@ -338,9 +369,12 @@ entirely.
 
 ## Privacy
 
-StayAwake collects nothing, stores nothing beyond its own toggle states,
-and makes no network connections. There is no analytics, no account, and
-no update checker phoning home.
+StayAwake collects nothing and stores nothing beyond its own toggle
+states. There is no analytics and no account. Since v2.5 the app makes
+exactly one kind of network request: checking a small public version
+feed for updates (and downloading a release you choose to install).
+The check sends nothing about you or your Mac — it is a plain file
+download.
 
 ---
 
