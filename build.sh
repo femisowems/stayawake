@@ -30,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>StayAwake</string>
   <key>CFBundleDisplayName</key><string>StayAwake</string>
   <key>CFBundleIdentifier</key><string>io.starterdev.stayawake</string>
-  <key>CFBundleVersion</key><string>2.5.0</string>
-  <key>CFBundleShortVersionString</key><string>2.5.0</string>
+  <key>CFBundleVersion</key><string>2.5.1</string>
+  <key>CFBundleShortVersionString</key><string>2.5.1</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>StayAwake</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

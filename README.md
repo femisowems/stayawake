@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/femisowems/stayawake/actions/workflows/build.yml"><img src="https://github.com/femisowems/stayawake/actions/workflows/build.yml/badge.svg" alt="Build"></a>
-  <a href="https://github.com/femisowems/stayawake/releases"><img src="https://img.shields.io/badge/version-v2.5.0-0f766e" alt="Version v2.5.0"></a>
+  <a href="https://github.com/femisowems/stayawake/releases"><img src="https://img.shields.io/badge/version-v2.5.1-0f766e" alt="Version v2.5.1"></a>
   <a href="https://github.com/femisowems/stayawake/releases"><img src="https://img.shields.io/github/downloads/femisowems/stayawake/total" alt="Downloads"></a>
   <a href="https://github.com/femisowems/stayawake/blob/main/LICENSE"><img src="https://img.shields.io/github/license/femisowems/stayawake" alt="License"></a>
 </p>

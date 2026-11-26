@@ -91,6 +91,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
     private var timer: Timer?
     private var tickCount: Int = 0
 
+    // Lazily-cached UI helpers (v2.5.1) — updateUI() runs once a
+    // second while a session is active, and building a DateFormatter
+    // and re-resolving SF Symbols on every tick was the app's main
+    // per-tick allocation cost. Both are now created once and reused.
+    private lazy var endTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    private lazy var activeMenuBarImage: NSImage? = menuBarImage(active: true)
+    private lazy var inactiveMenuBarImage: NSImage? = menuBarImage(active: false)
+    /// The whole-second value tick() last painted; a tick that lands
+    /// in the same second as the previous one skips the repaint.
+    private var lastRenderedSecond: Int?
+
     // Settings — persisted to UserDefaults whenever they change, and
     // reloaded at launch, so the toggles survive quitting the app.
     private var allowDisplaySleep = false {
@@ -233,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
     }
 
     var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.5.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.5.1"
     }
 
     func checkForUpdate(manual: Bool = false) {
@@ -574,9 +589,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(screenUnlocked),
             name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
+        // No tick timer is created here (v2.5.1): the timer is
+        // scoped to the session — activate() starts it and
+        // deactivate() stops it — so an idle, off StayAwake no
+        // longer wakes the run loop twice a second for nothing.
         if activateAtLaunch {
             activate(minutes: defaultMinutes)
         }
@@ -664,6 +680,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
     }
 
     // MARK: Session control
+    /// Starts the once-a-second session tick (v2.5.1). The display
+    /// only ever shows whole seconds, so a 1s interval loses
+    /// nothing over the old 0.5s one and halves the wake-ups; the
+    /// tolerance lets the run loop coalesce the fire with other
+    /// timers. Guarded so re-activating mid-session never stacks
+    /// a second timer.
+    private func startTickTimer() {
+        guard timer == nil else { return }
+        let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+        t.tolerance = 0.1
+        timer = t
+    }
+
+    private func stopTickTimer() {
+        timer?.invalidate()
+        timer = nil
+        tickCount = 0
+        lastRenderedSecond = nil
+    }
+
     func activate(minutes: Int) {
         releaseAssertions()
         pausedForLock = false
@@ -678,11 +716,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
             deadline = nil
         }
         if showPanelOnStart { showPanel() }
+        startTickTimer()
         buildMenu()
         updateUI()
     }
 
     func deactivate(chime: Bool = false) {
+        stopTickTimer()
         releaseAssertions()
         pausedForLock = false
         lockPausedAt = nil
@@ -715,8 +755,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
             deactivate(chime: chimeOnEnd)
             return
         }
-        // Battery checks roughly every 10 seconds (20 ticks at 0.5s).
-        if tickCount % 20 == 0 {
+        // Battery checks roughly every 10 seconds (10 ticks at 1s).
+        if tickCount % 10 == 0 {
             let (percent, onBattery) = batteryInfo()
             if offOnBattery && onBattery {
                 deactivate()
@@ -727,7 +767,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
                 return
             }
         }
-        updateUI()
+        // Repaint only when the displayed whole second has changed
+        // (v2.5.1) — the countdown renders whole seconds, so a tick
+        // that lands in the same second has nothing new to draw.
+        let displaySecond: Int
+        if let deadline {
+            displaySecond = Int(deadline.timeIntervalSinceNow)
+        } else if let startedAt {
+            displaySecond = Int(Date().timeIntervalSince(startedAt))
+        } else {
+            displaySecond = 0
+        }
+        if displaySecond != lastRenderedSecond {
+            lastRenderedSecond = displaySecond
+            updateUI()
+        }
     }
 
     /// Returns (percent charged if readable, true if currently
@@ -897,25 +951,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
             // Frozen display while the screen is locked: the countdown
             // resumes from this exact point on unlock.
             button.alphaValue = 1.0
-            button.image = menuBarImage(active: true)
+            button.image = activeMenuBarImage
             button.imagePosition = .imageLeading
+            // Panel labels only repaint while the panel is on
+            // screen (v2.5.1); the menu bar updates regardless.
+            let panelVisible = panel?.isVisible == true
             if let deadline {
                 let frozenAt = lockPausedAt ?? Date()
                 let left = Int(deadline.timeIntervalSince(frozenAt))
                 button.title = button.image == nil ? "☕ " + format(left) : format(left)
-                timeLabel?.stringValue = format(left)
+                if panelVisible { timeLabel?.stringValue = format(left) }
             } else {
                 button.title = button.image == nil ? "☕ ∞" : "∞"
                 let elapsed = startedAt.map { Int((lockPausedAt ?? Date()).timeIntervalSince($0)) } ?? 0
-                timeLabel?.stringValue = format(elapsed)
+                if panelVisible { timeLabel?.stringValue = format(elapsed) }
             }
-            statusLabel?.stringValue = "Paused — screen is locked"
-            endLabel?.stringValue = "Resumes when you unlock"
+            if panelVisible {
+                statusLabel?.stringValue = "Paused — screen is locked"
+                endLabel?.stringValue = "Resumes when you unlock"
+            }
             button.toolTip = "StayAwake is paused (screen locked)"
             return
         }
         if !isActive {
-            if let image = menuBarImage(active: false) {
+            if let image = inactiveMenuBarImage {
                 button.image = image
                 button.title = ""
             } else {
@@ -927,27 +986,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, URLSessionDownloadDele
             return
         }
         button.alphaValue = 1.0
-        button.image = menuBarImage(active: true)
+        button.image = activeMenuBarImage
         button.imagePosition = .imageLeading
+        // Panel labels/progress only repaint while the panel is on
+        // screen (v2.5.1); the menu bar updates regardless.
+        let panelVisible = panel?.isVisible == true
         if let deadline {
             let left = Int(deadline.timeIntervalSinceNow)
             button.title = button.image == nil ? "☕ " + format(left) : format(left)
-            timeLabel?.stringValue = format(left)
-            statusLabel?.stringValue = "ON — holding screen awake"
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            endLabel?.stringValue = "Ends " + formatter.string(from: deadline)
-            if totalSeconds > 0 {
-                let elapsed = totalSeconds - left
-                setProgress(Double(elapsed) / Double(totalSeconds))
+            if panelVisible {
+                timeLabel?.stringValue = format(left)
+                statusLabel?.stringValue = "ON — holding screen awake"
+                endLabel?.stringValue = "Ends " + endTimeFormatter.string(from: deadline)
+                if totalSeconds > 0 {
+                    let elapsed = totalSeconds - left
+                    setProgress(Double(elapsed) / Double(totalSeconds))
+                }
             }
         } else {
             button.title = button.image == nil ? "☕ ∞" : "∞"
-            let elapsed = startedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
-            timeLabel?.stringValue = format(elapsed)
-            statusLabel?.stringValue = "ON — runs until you stop it"
-            endLabel?.stringValue = "No end time"
-            setProgress(1)
+            if panelVisible {
+                let elapsed = startedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
+                timeLabel?.stringValue = format(elapsed)
+                statusLabel?.stringValue = "ON — runs until you stop it"
+                endLabel?.stringValue = "No end time"
+                setProgress(1)
+            }
         }
         button.toolTip = "StayAwake is on"
     }
